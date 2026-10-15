@@ -25,17 +25,36 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(scriptPayload),
     });
+
+    if (!upstreamRes.ok) {
+      const errText = await upstreamRes.text().catch(() => '');
+      return new Response(
+        JSON.stringify({ success: false, error: `Apps Script upstream returned HTTP ${upstreamRes.status}: ${errText.slice(0, 300)}` }),
+        { status: 502, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     const respText = await upstreamRes.text();
     let data: any = {};
     try {
       data = JSON.parse(respText);
     } catch {
-      data = { status: 'SUCCESS' };
+      return new Response(
+        JSON.stringify({ success: false, error: 'Apps Script returned non-JSON response.', raw: respText.slice(0, 300) }),
+        { status: 502, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (data.status === 'ERROR' || data.error) {
+      return new Response(
+        JSON.stringify({ success: false, error: data.message || data.error || 'Apps Script sync returned error.', result: data }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     return new Response(
       JSON.stringify({
-        success: data.status === 'SUCCESS',
+        success: true,
         result: data,
         message: data.message || 'Synced successfully.',
       }),

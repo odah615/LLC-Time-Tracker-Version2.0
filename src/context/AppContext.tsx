@@ -457,6 +457,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const pauseStartTimeRef = useRef<number | null>(initialActiveSession?.pauseStartTime || null);
   const lastHeartbeatEpochMsRef = useRef<number>(initialActiveSession?.lastHeartbeat || 0);
   const last5mSyncEpochMsRef = useRef<number>(initialActiveSession?.lastSync5m || 0);
+  const last10mSummarySyncEpochMsRef = useRef<number>(0);
+
+  const activeSegmentIdRef = useRef<string>(
+    initialActiveSession?.segmentId || `seg-${currentUser.employeeCode || currentUser.id}-${initialActiveSession?.taskStartTime || Date.now()}`
+  );
+
+  const ensureDailySummaryForToday = useCallback(() => {
+    const empCode = currentUser.employeeCode || currentUser.id;
+    const todayStr = getManilaDateString();
+    fetch('/api/daily-summary/ensure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        employeeCode: empCode,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        designation: currentDesignation,
+        date: todayStr,
+      }),
+    }).catch(() => {});
+  }, [currentUser, currentDesignation]);
 
   const computeElapsedSeconds = useCallback((): number => {
     if (!taskStartTimeRef.current) return 0;
@@ -594,14 +615,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
       const startTimeIso = new Date(startMs).toISOString();
 
+      const prevSegmentId = activeSegmentIdRef.current;
+      const completedTaskCategory = currentTask;
+
+      // 1. Finalize the existing task segment with its ORIGINAL task category and status 'completed'
       if (isTracking && duration > 0) {
         addTimeLog({
+          id: prevSegmentId,
           userId: currentUser.id,
           employeeCode: currentUser.employeeCode,
           userName: currentUser.name,
           userAvatar: currentUser.avatar,
           designation: currentDesignation,
-          task: currentTask,
+          task: completedTaskCategory,
           startTime: startTimeIso,
           endTime: now.toISOString(),
           durationSeconds: duration,
@@ -613,13 +639,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           keyboardActivityAvg: 90,
           idleSeconds: 0,
           date: todayStr,
-          notes: `Completed task segment for ${currentTask}`,
+          notes: `Completed task segment for ${completedTaskCategory}`,
           appsUsed: [],
         });
       }
 
+      // 2. Start a brand NEW task segment with a NEW stable segment ID
       const nextTask = taskSwitchPending.targetTask;
       const newStartMs = Date.now();
+      const newSegmentId = `seg-${currentUser.employeeCode || currentUser.id}-${newStartMs}`;
+
+      activeSegmentIdRef.current = newSegmentId;
       taskStartTimeRef.current = newStartMs;
       accumulatedPausedMsRef.current = 0;
       pauseStartTimeRef.current = null;
@@ -634,6 +664,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       try {
         const activeSessionData = {
+          segmentId: newSegmentId,
           employeeCode: currentUser.employeeCode || currentUser.id,
           userId: currentUser.id,
           task: nextTask,
@@ -648,6 +679,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
       } catch {}
 
+      // 3. Immediately send presence update for new task
       syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
         userId: currentUser.id,
         employeeCode: currentUser.employeeCode,
@@ -675,6 +707,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const startTracking = () => {
     const now = Date.now();
+    const empCode = currentUser.employeeCode || currentUser.id;
+    const newSegmentId = `seg-${empCode}-${now}`;
+
+    activeSegmentIdRef.current = newSegmentId;
     taskStartTimeRef.current = now;
     accumulatedPausedMsRef.current = 0;
     pauseStartTimeRef.current = null;
@@ -687,7 +723,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const activeSessionData = {
-        employeeCode: currentUser.employeeCode || currentUser.id,
+        segmentId: newSegmentId,
+        employeeCode: empCode,
         userId: currentUser.id,
         task: currentTask,
         designation: currentDesignation,
@@ -698,8 +735,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lastHeartbeat: now,
         lastSync5m: now,
       };
-      localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
+      localStorage.setItem(getActiveSessionStorageKey(empCode), JSON.stringify(activeSessionData));
     } catch {}
+
+    // Ensure Daily_Summary row is initialized immediately upon session start
+    ensureDailySummaryForToday();
 
     syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
       userId: currentUser.id,
@@ -732,6 +772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const activeSessionData = {
+        segmentId: activeSegmentIdRef.current,
         employeeCode: currentUser.employeeCode || currentUser.id,
         userId: currentUser.id,
         task: currentTask,
@@ -780,6 +821,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const activeSessionData = {
+        segmentId: activeSegmentIdRef.current,
         employeeCode: currentUser.employeeCode || currentUser.id,
         userId: currentUser.id,
         task: currentTask,
@@ -823,7 +865,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
     const startTimeIso = new Date(startMs).toISOString();
 
+    const segId = activeSegmentIdRef.current;
+
     addTimeLog({
+      id: segId,
       userId: currentUser.id,
       employeeCode: currentUser.employeeCode,
       userName: currentUser.name,
@@ -863,8 +908,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       role: currentUser.role,
       designation: currentDesignation,
       department: currentUser.department || 'Operations',
-      isOnline: true,
-      status: 'online',
+      isOnline: false,
+      status: 'offline',
       isTracking: false,
       isPaused: false,
       currentTask: 'Shift Concluded',
@@ -1313,7 +1358,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 5-minute task duration synchronization (300,000 ms)
       if (!isPausedRef.current && now - last5mSyncEpochMsRef.current >= 300000) {
         last5mSyncEpochMsRef.current = now;
-        const activeSegmentId = `active-seg-${currentUserRef.current.employeeCode || currentUserRef.current.id}`;
+        const activeSegmentId = activeSegmentIdRef.current;
         const startTimeIso = new Date(taskStartTimeRef.current).toISOString();
         const activeLog: TimeLog = {
           id: activeSegmentId,
@@ -1339,8 +1384,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
 
         setTimeLogs((prev) => {
-          const filtered = prev.filter((l) => l.id !== activeSegmentId);
-          return [activeLog, ...filtered];
+          const map = new Map(prev.map((l) => [l.id, l]));
+          map.set(activeSegmentId, activeLog);
+          const updated = Array.from(map.values());
+          localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
+          return updated;
         });
 
         fetch('/api/timelogs', {
@@ -1350,6 +1398,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }).catch((err) => {
           console.warn('5-minute task duration sync notice:', err);
         });
+      }
+
+      // 10-minute summary update schedule (600,000 ms)
+      if (now - last10mSummarySyncEpochMsRef.current >= 600000) {
+        last10mSummarySyncEpochMsRef.current = now;
+        const empCode = currentUserRef.current.employeeCode || currentUserRef.current.id;
+        const todayStr = getManilaDateString(new Date(now));
+        fetch(`/api/daily-summary?userId=${encodeURIComponent(empCode)}&date=${encodeURIComponent(todayStr)}`)
+          .catch((err) => {
+            console.warn('10-minute summary update notice:', err);
+          });
       }
     };
 

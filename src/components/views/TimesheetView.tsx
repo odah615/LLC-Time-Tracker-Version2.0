@@ -156,21 +156,20 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
   const todayStr = getManilaDateString();
   const [anchorDate, setAnchorDate] = useState<string>(todayStr);
 
-  const getMondaySunday = (refDateStr: string) => {
+  const getSundaySaturday = (refDateStr: string) => {
     const refDate = new Date(refDateStr || todayStr);
-    const dayOfWeek = refDate.getDay();
-    const distanceToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const monday = new Date(refDate);
-    monday.setDate(refDate.getDate() + distanceToMonday);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
+    const dayOfWeek = refDate.getDay(); // 0 = Sunday, 6 = Saturday
+    const sunday = new Date(refDate);
+    sunday.setDate(refDate.getDate() - dayOfWeek);
+    const saturday = new Date(sunday);
+    saturday.setDate(sunday.getDate() + 6);
     return {
-      start: getManilaDateString(monday),
-      end: getManilaDateString(sunday),
+      start: getManilaDateString(sunday),
+      end: getManilaDateString(saturday),
     };
   };
 
-  const initialWeek = getMondaySunday(todayStr);
+  const initialWeek = getSundaySaturday(todayStr);
   const [weekStartDate, setWeekStartDate] = useState<string>(initialWeek.start);
   const [weekEndDate, setWeekEndDate] = useState<string>(initialWeek.end);
 
@@ -383,7 +382,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
   const handleTabSwitch = (newMode: ViewTabMode) => {
     setViewTab(newMode);
     if (newMode === 'weekly' && (!weekStartDate || !weekEndDate)) {
-      const w = getMondaySunday(anchorDate || todayStr);
+      const w = getSundaySaturday(anchorDate || todayStr);
       setWeekStartDate(w.start);
       setWeekEndDate(w.end);
     }

@@ -443,22 +443,50 @@ app.get('/api/presence', (req, res) => {
 
 app.post('/api/presence', (req, res) => {
   const p = req.body;
-  if (!p || !p.userId) {
-    return res.status(400).json({ error: 'Missing userId in presence payload' });
+  if (!p || (!p.userId && !p.employeeCode)) {
+    return res.status(400).json({ error: 'Missing userId or employeeCode in presence payload' });
   }
-  const existing = bridgeState.presence[p.userId] || {};
+
+  const empCode = String(p.employeeCode || p.userId || '').trim().toLowerCase();
+  
+  // Find existing presence record by employeeCode or userId to ensure ONE persistent row per employee
+  let matchKey = Object.keys(bridgeState.presence).find((k) => {
+    const item = bridgeState.presence[k];
+    const itemCode = String(item?.employeeCode || item?.userId || '').trim().toLowerCase();
+    return itemCode === empCode;
+  });
+
+  if (!matchKey) {
+    matchKey = empCode;
+  }
+
+  const existing = bridgeState.presence[matchKey] || {};
   const isOffline = p.isOnline === false || p.status === 'offline';
-  bridgeState.presence[p.userId] = {
+  const nowIso = p.lastHeartbeat || new Date().toISOString();
+
+  // Preserve firstCheckin for current shift, or set if online
+  const firstCheckin = existing.firstCheckin || (!isOffline ? nowIso : undefined);
+
+  const updatedPresence = {
     ...existing,
     ...p,
+    employeeCode: p.employeeCode || existing.employeeCode || p.userId,
+    userId: p.userId || existing.userId || p.employeeCode,
+    userName: p.userName || existing.userName || 'Employee',
+    role: p.role || existing.role || 'agent',
+    designation: p.designation || existing.designation || 'Agent',
     isOnline: !isOffline,
     status: isOffline ? 'offline' : (p.status || 'online'),
     isTracking: isOffline ? false : (p.isTracking ?? existing.isTracking ?? false),
     isPaused: isOffline ? false : (p.isPaused ?? existing.isPaused ?? false),
     currentTask: isOffline ? 'Shift Concluded' : (p.currentTask || existing.currentTask || 'Active Shift'),
-    currentApp: isOffline ? 'None' : (p.currentApp || existing.currentApp || 'Desktop Software'),
-    lastHeartbeat: p.lastHeartbeat || new Date().toISOString(),
+    currentApp: isOffline ? 'None' : (p.currentApp || existing.currentApp || 'Desktop Tracker'),
+    elapsedSeconds: isOffline ? 0 : (p.elapsedSeconds ?? existing.elapsedSeconds ?? 0),
+    firstCheckin,
+    lastHeartbeat: nowIso,
   };
+
+  bridgeState.presence[matchKey] = updatedPresence;
   persistBridgeState();
 
   // Asynchronously attempt upstream transmission if configured
@@ -469,12 +497,12 @@ app.post('/api/presence', (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'HEARTBEAT_UPDATE',
-        ...bridgeState.presence[p.userId],
+        ...updatedPresence,
       }),
     }).catch(() => {});
   }
 
-  res.json({ success: true, presence: bridgeState.presence[p.userId] });
+  res.json({ success: true, presence: updatedPresence });
 });
 
 app.get('/api/timelogs', (req, res) => {
@@ -512,26 +540,24 @@ app.post('/api/timelogs', (req, res) => {
       const canonicalCode = String(rawLog.employeeCode || rawLog.userId || '').trim().toLowerCase();
       if (!canonicalCode) continue;
 
-      // Validate segment ownership if updating an active running segment
-      const isSegmentId = String(rawLog.id).startsWith('active-seg-') || String(rawLog.id).startsWith('seg-running-');
-      if (isSegmentId) {
-        const existing = map.get(rawLog.id);
-        if (existing) {
-          const existingCode = String(existing.employeeCode || existing.userId || '').trim().toLowerCase();
-          if (existingCode && existingCode !== canonicalCode) {
-            console.warn(`[Timelogs] Cross-employee task segment update blocked: ${canonicalCode} cannot modify segment of ${existingCode}`);
-            continue;
-          }
+      // Validate segment ownership if updating an existing segment
+      const existing = map.get(rawLog.id);
+      if (existing) {
+        const existingCode = String(existing.employeeCode || existing.userId || '').trim().toLowerCase();
+        if (existingCode && existingCode !== canonicalCode) {
+          console.warn(`[Timelogs] Cross-employee task segment update blocked: ${canonicalCode} cannot modify segment of ${existingCode}`);
+          continue;
         }
       }
 
-      // If completing a task segment, close and clean up ONLY the active running segments for THIS specific employee
+      // If completing a task segment, update THAT exact segment in place and clean up any STALE running segments for THIS specific employee only
       if (rawLog.status === 'completed') {
-        for (const [k, existing] of map.entries()) {
-          const existingCode = String(existing.employeeCode || existing.userId || '').trim().toLowerCase();
+        for (const [k, existingLog] of map.entries()) {
+          const existingCode = String(existingLog.employeeCode || existingLog.userId || '').trim().toLowerCase();
           if (
             existingCode === canonicalCode &&
-            (existing.status === 'running' || String(k).startsWith('active-seg-') || String(k).startsWith('seg-running-'))
+            k !== rawLog.id &&
+            (existingLog.status === 'running' || String(k).startsWith('active-seg-') || String(k).startsWith('seg-running-'))
           ) {
             map.delete(k);
           }
@@ -562,15 +588,35 @@ app.post('/api/timelogs', (req, res) => {
   return res.json({ success: true, count: bridgeState.timelogs.length });
 });
 
+// POST /api/daily-summary/ensure: Creates or verifies a Daily_Summary row when tracking starts
+app.post('/api/daily-summary/ensure', (req, res) => {
+  const { employeeCode, userId, userName, designation, date } = req.body || {};
+  if (!employeeCode && !userId) {
+    return res.status(400).json({ error: 'Employee identification required' });
+  }
+
+  const empCode = String(employeeCode || userId).trim();
+  const workDate = date || new Date().toISOString().split('T')[0];
+
+  // Return calculated summary for that employee/date
+  const allLogs = bridgeState.timelogs.filter((l) => {
+    const c = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+    return c === empCode.toLowerCase() && l.date === workDate;
+  });
+
+  res.json({
+    success: true,
+    message: 'Daily summary row ensured.',
+    employeeCode: empCode,
+    date: workDate,
+    existingLogs: allLogs.length,
+  });
+});
+
 // GET /api/daily-summary: Computes exact daily summary according to SPREADSHEET_SCHEMA Daily_Summary tab
 app.get('/api/daily-summary', (req, res) => {
   const { date, userId } = req.query as { date?: string; userId?: string };
   const allLogs = bridgeState.timelogs;
-
-  interface GroupKey {
-    date: string;
-    employeeCode: string;
-  }
 
   const groups = new Map<string, any[]>();
   for (const l of allLogs) {
@@ -604,7 +650,6 @@ app.get('/api/daily-summary', (req, res) => {
     const consolidatedLogs = latestRunningLog ? [...completedLogs, latestRunningLog] : completedLogs;
     const logsForTiming = consolidatedLogs.length > 0 ? consolidatedLogs : logs;
 
-    // Sort by startTime
     const sorted = [...logsForTiming].sort((a, b) => {
       const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
       const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
@@ -645,6 +690,9 @@ app.get('/api/daily-summary', (req, res) => {
       grossTrackedShift: formatSecs(grossSeconds),
       totalIdleBreaks: formatSecs(totalIdleSeconds),
       netProductiveWork: formatSecs(netSeconds),
+      grossSeconds,
+      idleSeconds: totalIdleSeconds,
+      netSeconds,
       durationSeconds: netSeconds,
       avgActivity: `${avgAct}%`,
       shiftStatus: isCurrentlyRunning ? 'Active Shift' : 'Shift Completed',
@@ -653,6 +701,129 @@ app.get('/api/daily-summary', (req, res) => {
   });
 
   res.json({ success: true, summaries });
+});
+
+// GET /api/weekly-summary: Sunday-Saturday weekly aggregations from Daily_Summary
+app.get('/api/weekly-summary', (req, res) => {
+  const { userId } = req.query as { userId?: string };
+  const allLogs = bridgeState.timelogs;
+
+  // Group logs by employee and Sunday-Saturday week range
+  const getSundaySaturdayWeekRange = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return { start: dateStr, end: dateStr };
+    const day = d.getDay(); // 0 = Sunday
+    const sunday = new Date(d);
+    sunday.setDate(d.getDate() - day);
+    const saturday = new Date(sunday);
+    saturday.setDate(sunday.getDate() + 6);
+    return {
+      start: sunday.toISOString().split('T')[0],
+      end: saturday.toISOString().split('T')[0],
+    };
+  };
+
+  const groups = new Map<string, any[]>();
+  for (const l of allLogs) {
+    if (!l.date) continue;
+    const empCode = l.employeeCode || l.userId || 'UNKNOWN';
+    if (userId) {
+      const q = userId.trim().toLowerCase();
+      if (String(l.userId || '').toLowerCase() !== q && String(empCode).toLowerCase() !== q) {
+        continue;
+      }
+    }
+    const week = getSundaySaturdayWeekRange(l.date);
+    const key = `${week.start}_to_${week.end}__${empCode}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(l);
+  }
+
+  const weeklySummaries = Array.from(groups.entries()).map(([key, logs]) => {
+    const [weekRange, empCode] = key.split('__');
+    const [weekStart, weekEnd] = weekRange.split('_to_');
+    const firstLog = logs[0] || {};
+
+    const grossSec = logs.reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
+    const idleSec = logs.reduce((acc, l) => acc + Math.max(0, Number(l.idleSeconds) || 0), 0);
+    const netSec = Math.max(0, grossSec - idleSec);
+
+    const formatSecs = (sec: number) => {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      return `${h}h ${m}m`;
+    };
+
+    return {
+      weekStart,
+      weekEnd,
+      employeeCode: empCode,
+      employeeName: firstLog.userName || empCode,
+      designation: firstLog.designation || 'Agent',
+      grossTracked: formatSecs(grossSec),
+      totalIdleBreaks: formatSecs(idleSec),
+      netProductiveWork: formatSecs(netSec),
+      grossSeconds: grossSec,
+      idleSeconds: idleSec,
+      netSeconds: netSec,
+      daysActive: new Set(logs.map((l) => l.date)).size,
+    };
+  });
+
+  res.json({ success: true, weeklySummaries });
+});
+
+// GET /api/monthly-summary: Monthly calendar aggregations from Daily_Summary
+app.get('/api/monthly-summary', (req, res) => {
+  const { userId } = req.query as { userId?: string };
+  const allLogs = bridgeState.timelogs;
+
+  const groups = new Map<string, any[]>();
+  for (const l of allLogs) {
+    if (!l.date || l.date.length < 7) continue;
+    const monthKey = l.date.substring(0, 7); // YYYY-MM
+    const empCode = l.employeeCode || l.userId || 'UNKNOWN';
+    if (userId) {
+      const q = userId.trim().toLowerCase();
+      if (String(l.userId || '').toLowerCase() !== q && String(empCode).toLowerCase() !== q) {
+        continue;
+      }
+    }
+    const key = `${monthKey}__${empCode}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(l);
+  }
+
+  const monthlySummaries = Array.from(groups.entries()).map(([key, logs]) => {
+    const [monthKey, empCode] = key.split('__');
+    const firstLog = logs[0] || {};
+
+    const grossSec = logs.reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
+    const idleSec = logs.reduce((acc, l) => acc + Math.max(0, Number(l.idleSeconds) || 0), 0);
+    const netSec = Math.max(0, grossSec - idleSec);
+
+    const formatSecs = (sec: number) => {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      return `${h}h ${m}m`;
+    };
+
+    return {
+      month: monthKey,
+      employeeCode: empCode,
+      employeeName: firstLog.userName || empCode,
+      designation: firstLog.designation || 'Agent',
+      grossTracked: formatSecs(grossSec),
+      totalIdleBreaks: formatSecs(idleSec),
+      netProductiveWork: formatSecs(netSec),
+      grossSeconds: grossSec,
+      idleSeconds: idleSec,
+      netSeconds: netSec,
+      daysActive: new Set(logs.map((l) => l.date)).size,
+    };
+  });
+
+  res.json({ success: true, monthlySummaries });
 });
 
 app.get('/api/users', (req, res) => {
