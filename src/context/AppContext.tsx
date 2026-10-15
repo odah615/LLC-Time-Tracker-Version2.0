@@ -512,7 +512,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const confirmTaskSwitch = () => {
     if (taskSwitchPending) {
+      const now = new Date();
+      const todayStr = getManilaDateString(now);
+      const duration = Math.max(1, elapsedSeconds);
+      const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
+
+      if (isTracking && duration > 0) {
+        addTimeLog({
+          userId: currentUser.id,
+          employeeCode: currentUser.employeeCode,
+          userName: currentUser.name,
+          userAvatar: currentUser.avatar,
+          designation: currentDesignation,
+          task: currentTask,
+          startTime: startTimeIso,
+          endTime: now.toISOString(),
+          durationSeconds: duration,
+          status: 'completed',
+          geoTimezone: currentUser.geoTimezone || 'Asia/Manila',
+          geoLocalStartTime: getManilaTimeString(new Date(now.getTime() - duration * 1000)),
+          geoLocalEndTime: getManilaTimeString(now),
+          mouseActivityAvg: 95,
+          keyboardActivityAvg: 90,
+          idleSeconds: 0,
+          date: todayStr,
+          notes: `Completed task segment for ${currentTask}`,
+          appsUsed: [],
+        });
+      }
+
       setCurrentTask(taskSwitchPending.targetTask);
+      setElapsedSeconds(0);
+      setIsTracking(true);
+      setIsPaused(false);
       setTaskSwitchPending(null);
     }
   };
@@ -539,31 +571,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isTracking) return;
     const now = new Date();
     const todayStr = getManilaDateString(now);
-    const newLog: TimeLog = {
-      id: `log-${Date.now()}`,
+    const duration = Math.max(1, elapsedSeconds);
+    const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
+
+    addTimeLog({
       userId: currentUser.id,
       employeeCode: currentUser.employeeCode,
       userName: currentUser.name,
       userAvatar: currentUser.avatar,
       designation: currentDesignation,
       task: currentTask,
-      startTime: now.toISOString(),
+      startTime: startTimeIso,
       endTime: now.toISOString(),
-      durationSeconds: Math.max(1, elapsedSeconds),
+      durationSeconds: duration,
       status: 'completed',
       geoTimezone: currentUser.geoTimezone || 'Asia/Manila',
-      geoLocalStartTime: getManilaTimeString(now),
+      geoLocalStartTime: getManilaTimeString(new Date(now.getTime() - duration * 1000)),
       geoLocalEndTime: getManilaTimeString(now),
       mouseActivityAvg: 95,
       keyboardActivityAvg: 90,
       idleSeconds: 0,
       date: todayStr,
-      notes: 'Logged via LLC-Time-Tracker-V2',
+      notes: 'Logged via LLC-Time-Tracker-V2 Desktop Tracker',
       appsUsed: [],
-    };
-    setTimeLogs((prev) => [newLog, ...prev]);
+    });
+
     setIsTracking(false);
     setIsPaused(false);
+    setElapsedSeconds(0);
   };
 
   const getTodayTrackedSeconds = useCallback((): number => {
@@ -662,9 +697,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const approvePasswordResetRequest = (requestId: string) => {};
   const rejectPasswordResetRequest = (requestId: string) => {};
 
-  const addTimeLog = (logData: Omit<TimeLog, 'id'>) => {
-    const newLog: TimeLog = { ...logData, id: `log-${Date.now()}` };
-    setTimeLogs((prev) => [newLog, ...prev]);
+  const addTimeLog = (logData: Omit<TimeLog, 'id'> & { id?: string }) => {
+    const newLog: TimeLog = { id: logData.id || `log-${Date.now()}`, ...logData };
+    setTimeLogs((prev) => {
+      const updated = [newLog, ...prev];
+      localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
+      return updated;
+    });
+
+    fetch('/api/timelogs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([newLog]),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setSaveToast('Time log successfully persisted to V2 Spreadsheet!');
+          setTimeout(() => setSaveToast(null), 3000);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to sync time log to remote spreadsheet:', err);
+      });
   };
 
   const updateTimeLog = (id: string, data: Partial<TimeLog>) => {
