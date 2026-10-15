@@ -21,7 +21,7 @@ import { doc, setDoc, deleteDoc, onSnapshot, collection, disableNetwork, enableN
 import { db } from '../lib/firebase';
 import { getManilaDateString, getManilaTimeString, formatLogStartTime, formatLogEndTime } from '../lib/dateUtils';
 import { getJitteredPollInterval } from '../lib/fetchUtils';
-import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee } from '../lib/userUtils';
+import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee, isPlaceholderName } from '../lib/userUtils';
 import {
   syncDataToGoogleSheetsWebhook,
   syncEmployeesToGoogleSheetsWebhook,
@@ -295,17 +295,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result: User[] = [];
     for (const rawUser of userList) {
       let norm = normalizeSuperAdmin(rawUser);
-      const canon = resolveCanonicalEmployee(norm);
-      if (canon) {
-        norm = {
-          ...norm,
-          name: canon.name,
-          username: canon.username,
-          employeeCode: canon.code,
-          email: canon.email || norm.email,
-          role: canon.role || norm.role,
-          designation: canon.designation || norm.designation,
-        };
+      const isSpreadsheetRecord = norm.employeeCode && norm.name && norm.role && !isPlaceholderName(norm.name, norm.username, norm.employeeCode);
+      if (!isSpreadsheetRecord) {
+        const canon = resolveCanonicalEmployee(norm);
+        if (canon) {
+          norm = {
+            ...norm,
+            name: canon.name,
+            username: canon.username,
+            employeeCode: canon.code,
+            email: canon.email || norm.email,
+            role: canon.role || norm.role,
+            designation: canon.designation || norm.designation,
+          };
+        }
       }
       if (!norm.username || norm.username.trim() === '') {
         norm.username = generateUniqueUsername(norm.name, result, norm.id);
@@ -314,6 +317,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return result;
   };
+
+  useEffect(() => {
+    const loadAuthoritativeRoster = async () => {
+      try {
+        const res = await fetchEmployeesFromGoogleSheets();
+        if (res.success && res.employees && res.employees.length > 0) {
+          const merged = deduplicateUsers(ensureUsernames([...res.employees, ...users]));
+          setUsers(merged);
+          localStorage.setItem('trackpulse_users', JSON.stringify(merged));
+        }
+      } catch (err) {
+        console.warn('Failed to load authoritative Google Sheets roster:', err);
+      }
+    };
+    loadAuthoritativeRoster();
+  }, []);
 
   const [users, setUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem('trackpulse_users');
@@ -592,7 +611,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const importEmployeesFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
-    return { success: true, count: users.length, message: `Loaded ${users.length} accounts.` };
+    try {
+      const res = await fetchEmployeesFromGoogleSheets();
+      if (res.success && res.employees && res.employees.length > 0) {
+        const merged = deduplicateUsers(ensureUsernames(res.employees));
+        setUsers(merged);
+        localStorage.setItem('trackpulse_users', JSON.stringify(merged));
+        return { success: true, count: merged.length, message: res.message };
+      }
+      return { success: false, count: users.length, message: 'Could not fetch remote employee roster.' };
+    } catch (err: any) {
+      return { success: false, count: users.length, message: err?.message || 'Error fetching roster.' };
+    }
   };
 
   const importTimeLogsFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
