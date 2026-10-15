@@ -709,6 +709,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const importPresenceFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
+    try {
+      const res = await fetchLivePresenceFromGoogleSheets(googleSheetsWebhookUrl, DEFAULT_SPREADSHEET_ID, users);
+      if (res.success && Array.isArray(res.presenceList)) {
+        setUserPresenceList(res.presenceList);
+        return { success: true, count: res.presenceList.length, message: res.message };
+      }
+    } catch (err: any) {
+      console.warn('Error fetching live presence from Google Sheets:', err);
+    }
     return { success: true, count: userPresenceList.length, message: 'Presence updated.' };
   };
 
@@ -831,6 +840,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const elapsedSecondsRef = useRef(elapsedSeconds);
+  elapsedSecondsRef.current = elapsedSeconds;
+
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+
+  const currentDesignationRef = useRef(currentDesignation);
+  currentDesignationRef.current = currentDesignation;
+
+  const currentTaskRef = useRef(currentTask);
+  currentTaskRef.current = currentTask;
+
+  // Live Presence Polling (every 10 seconds)
+  useEffect(() => {
+    let isMounted = true;
+    const pollPresence = async () => {
+      try {
+        const res = await fetchLivePresenceFromGoogleSheets(googleSheetsWebhookUrl, DEFAULT_SPREADSHEET_ID, users);
+        if (isMounted && res.success && Array.isArray(res.presenceList)) {
+          setUserPresenceList(res.presenceList);
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+    pollPresence();
+    const interval = setInterval(pollPresence, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [googleSheetsWebhookUrl, users]);
+
   useEffect(() => {
     let interval: any = null;
     if (isTracking && !isPaused) {
@@ -845,45 +887,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     let interval: any = null;
     if (isTracking && !isPaused) {
-      interval = setInterval(() => {
+      const sendHeartbeat = () => {
         const heartbeatPayload = {
-          userId: currentUser.id,
-          employeeCode: currentUser.employeeCode,
-          userName: currentUser.name,
-          role: currentUser.role,
-          designation: currentDesignation,
-          department: currentUser.department || 'Operations',
+          userId: currentUserRef.current.id,
+          employeeCode: currentUserRef.current.employeeCode,
+          userName: currentUserRef.current.name,
+          role: currentUserRef.current.role,
+          designation: currentDesignationRef.current,
+          department: currentUserRef.current.department || 'Operations',
           isOnline: true,
           isTracking: true,
           isPaused: false,
-          currentTask,
-          elapsedSeconds,
+          currentTask: currentTaskRef.current,
+          elapsedSeconds: elapsedSecondsRef.current,
           lastHeartbeat: new Date().toISOString(),
           loginPlatform: 'software' as const,
         };
         syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, heartbeatPayload).catch(() => {});
-      }, 180000); // 3 minutes
+      };
+      sendHeartbeat();
+      interval = setInterval(sendHeartbeat, 180000); // 3 minutes
     }
     return () => clearInterval(interval);
-  }, [isTracking, isPaused, currentTask, elapsedSeconds, currentUser, currentDesignation, googleSheetsWebhookUrl]);
+  }, [isTracking, isPaused, googleSheetsWebhookUrl]);
 
   // Objective 2: 5-Minute Task Duration Synchronization
   useEffect(() => {
     let interval: any = null;
     if (isTracking && !isPaused) {
-      interval = setInterval(() => {
-        const activeSegmentId = `active-seg-${currentUser.id}-${getManilaDateString()}`;
+      const syncTaskDuration = () => {
+        const activeSegmentId = `active-seg-${currentUserRef.current.id}-${getManilaDateString()}`;
         const now = new Date();
-        const duration = Math.max(1, elapsedSeconds);
+        const duration = Math.max(1, elapsedSecondsRef.current);
         const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
         const activeLog: TimeLog = {
           id: activeSegmentId,
-          userId: currentUser.id,
-          employeeCode: currentUser.employeeCode,
-          userName: currentUser.name,
-          userAvatar: currentUser.avatar || '',
-          designation: currentDesignation,
-          task: currentTask,
+          userId: currentUserRef.current.id,
+          employeeCode: currentUserRef.current.employeeCode,
+          userName: currentUserRef.current.name,
+          userAvatar: currentUserRef.current.avatar || '',
+          designation: currentDesignationRef.current,
+          task: currentTaskRef.current,
           date: getManilaDateString(now),
           startTime: startTimeIso,
           endTime: 'In Progress (5m Sync)',
@@ -905,10 +949,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }).catch((err) => {
           console.warn('5-minute task duration sync notice:', err);
         });
-      }, 300000); // 5 minutes
+      };
+      interval = setInterval(syncTaskDuration, 300000); // 5 minutes
     }
     return () => clearInterval(interval);
-  }, [isTracking, isPaused, currentTask, elapsedSeconds, currentUser, currentDesignation]);
+  }, [isTracking, isPaused]);
 
   return (
     <AppContext.Provider

@@ -623,11 +623,12 @@ export const fetchLivePresenceFromGoogleSheets = async (
     });
     if (proxyRes.ok) {
       const data: any = await proxyRes.json();
-      if (data && Array.isArray(data.presence)) {
+      if (data) {
+        const list = Array.isArray(data) ? data : (Array.isArray(data.presence) ? data.presence : []);
         return {
           success: true,
-          presenceList: data.presence,
-          message: `Successfully loaded ${data.presence.length} live presence records.`,
+          presenceList: list,
+          message: `Successfully loaded ${list.length} live presence records.`,
         };
       }
     }

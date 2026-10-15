@@ -433,7 +433,7 @@ app.post('/api/config', (req, res) => {
 
 app.get('/api/presence', (req, res) => {
   cleanStalePresence();
-  res.json(Object.values(bridgeState.presence));
+  res.json({ success: true, presence: Object.values(bridgeState.presence) });
 });
 
 app.post('/api/presence', (req, res) => {
@@ -452,7 +452,7 @@ app.post('/api/presence', (req, res) => {
 });
 
 app.get('/api/timelogs', (req, res) => {
-  res.json(bridgeState.timelogs);
+  res.json({ success: true, timeLogs: bridgeState.timelogs });
 });
 
 app.post('/api/timelogs', (req, res) => {
