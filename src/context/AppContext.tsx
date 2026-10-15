@@ -661,7 +661,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const importTimeLogsFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
-    return { success: true, count: timeLogs.length, message: `Loaded ${timeLogs.length} logs.` };
+    try {
+      const res = await fetchTimeLogsFromGoogleSheets(undefined, undefined, { userId: currentUser.employeeCode || currentUser.id });
+      if (res.success && Array.isArray(res.timeLogs) && res.timeLogs.length > 0) {
+        const mappedLogs: TimeLog[] = res.timeLogs.map((l: any) => ({
+          id: l.id || l.sessionId || `log-${Math.random()}`,
+          userId: l.userId || currentUser.id,
+          employeeCode: l.employeeCode || currentUser.employeeCode,
+          userName: l.userName || currentUser.name,
+          userAvatar: l.userAvatar || currentUser.avatar || '',
+          designation: l.designation || currentUser.designation,
+          task: l.task || 'Work',
+          date: l.date || getManilaDateString(),
+          startTime: l.startTime || new Date().toISOString(),
+          endTime: l.endTime || 'In Progress',
+          durationSeconds: Number(l.durationSeconds || 0),
+          status: l.status || 'completed',
+          geoTimezone: 'Asia/Manila',
+          geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
+          geoLocalEndTime: l.geoLocalEndTime || l.endTime || '',
+          mouseActivityAvg: l.mousePercentage || 95,
+          keyboardActivityAvg: l.keyboardPercentage || 90,
+          idleSeconds: (l.idleMinutes || 0) * 60,
+          notes: l.notes || '',
+          appsUsed: [],
+        }));
+        setTimeLogs((prev) => {
+          const map = new Map(prev.map((item) => [item.id, item]));
+          for (const item of mappedLogs) {
+            map.set(item.id, item);
+          }
+          const merged = Array.from(map.values());
+          localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
+          return merged;
+        });
+        return { success: true, count: mappedLogs.length, message: res.message };
+      }
+    } catch (err: any) {
+      console.warn('Error fetching time logs from Google Sheets:', err);
+    }
+    return { success: true, count: timeLogs.length, message: `Loaded ${timeLogs.length} local logs.` };
   };
 
   const importPresenceFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
@@ -791,6 +830,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return () => clearInterval(interval);
   }, [isTracking, isPaused]);
+
+  // Objective 1: 3-Minute Heartbeat (Live_Presence only)
+  useEffect(() => {
+    let interval: any = null;
+    if (isTracking && !isPaused) {
+      interval = setInterval(() => {
+        const heartbeatPayload = {
+          userId: currentUser.id,
+          employeeCode: currentUser.employeeCode,
+          userName: currentUser.name,
+          role: currentUser.role,
+          designation: currentDesignation,
+          department: currentUser.department || 'Operations',
+          isOnline: true,
+          isTracking: true,
+          isPaused: false,
+          currentTask,
+          elapsedSeconds,
+          lastHeartbeat: new Date().toISOString(),
+          loginPlatform: 'software' as const,
+        };
+        syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, heartbeatPayload).catch(() => {});
+      }, 180000); // 3 minutes
+    }
+    return () => clearInterval(interval);
+  }, [isTracking, isPaused, currentTask, elapsedSeconds, currentUser, currentDesignation, googleSheetsWebhookUrl]);
+
+  // Objective 2: 5-Minute Task Duration Synchronization
+  useEffect(() => {
+    let interval: any = null;
+    if (isTracking && !isPaused) {
+      interval = setInterval(() => {
+        const activeSegmentId = `active-seg-${currentUser.id}-${getManilaDateString()}`;
+        const now = new Date();
+        const duration = Math.max(1, elapsedSeconds);
+        const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
+        const activeLog: TimeLog = {
+          id: activeSegmentId,
+          userId: currentUser.id,
+          employeeCode: currentUser.employeeCode,
+          userName: currentUser.name,
+          userAvatar: currentUser.avatar || '',
+          designation: currentDesignation,
+          task: currentTask,
+          date: getManilaDateString(now),
+          startTime: startTimeIso,
+          endTime: 'In Progress (5m Sync)',
+          durationSeconds: duration,
+          status: 'running',
+          geoTimezone: 'Asia/Manila',
+          geoLocalStartTime: getManilaTimeString(new Date(now.getTime() - duration * 1000)),
+          geoLocalEndTime: getManilaTimeString(now),
+          mouseActivityAvg: 95,
+          keyboardActivityAvg: 90,
+          idleSeconds: 0,
+          notes: 'Active task segment 5-minute sync',
+          appsUsed: [],
+        };
+        fetch('/api/timelogs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([activeLog]),
+        }).catch((err) => {
+          console.warn('5-minute task duration sync notice:', err);
+        });
+      }, 300000); // 5 minutes
+    }
+    return () => clearInterval(interval);
+  }, [isTracking, isPaused, currentTask, elapsedSeconds, currentUser, currentDesignation]);
 
   return (
     <AppContext.Provider

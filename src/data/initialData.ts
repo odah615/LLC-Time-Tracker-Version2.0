@@ -94,7 +94,6 @@ export const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
   'Agent': [
     'Data Entry & Market Research',
     'Email Reachout',
-    'Email Interaction',
     'Follow-up',
     'Training',
     'Team Meeting',
