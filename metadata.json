@@ -1,0 +1,6 @@
+{
+  "name": "LLC-Time-Tracker-V2",
+  "description": "Professional Agent Time Tracker & Productivity Management Suite with GEO World Clocks, Activity Logs, App Tracking, Screenshots, and Payroll.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Employee user records",
+      "type": "object",
+      "properties": {
+        "employeeCode": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "designation": { "type": "string" }
+      }
+    },
+    "TimeLog": {
+      "title": "TimeLog",
+      "description": "Shift time tracking logs",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string" },
+        "durationSeconds": { "type": "number" }
+      }
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable system audit trail entries",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string" },
+        "category": { "type": "string" },
+        "details": { "type": "string" }
+      }
+    },
+    "ScreenshotLog": {
+      "title": "ScreenshotLog",
+      "description": "Visual desktop surveillance screenshot captures with activity telemetry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "employeeCode": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "department": { "type": "string" },
+        "date": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "capturedAtIso": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "activityPercent": { "type": "number" },
+        "mouseActivityPercent": { "type": "number" },
+        "keyboardActivityPercent": { "type": "number" },
+        "activeApp": { "type": "string" },
+        "isBlurred": { "type": "boolean" },
+        "lowActivityAlert": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "/screenshots/{screenshotId}": {
+      "schema": "ScreenshotLog",
+      "description": "Direct individual indexed collection of desktop screenshots for fast querying"
+    },
+    "/system_state/screenshots": {
+      "schema": "ScreenshotLog",
+      "description": "Centralized system screenshots registry"
+    }
+  }
+}
