@@ -503,6 +503,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const selectTaskWithPrompt = (task: TaskCategory) => {
+    const desig = currentUser.designation || currentDesignation;
+    if (task === 'Email Interaction' && (desig === 'Agent' || desig === 'Outbound Agent/Team')) {
+      console.warn('Regular Agents are not permitted to select Email Interaction');
+      return;
+    }
     if (isTracking) {
       setTaskSwitchPending({ targetTask: task });
     } else {
@@ -794,7 +799,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const designationList = Object.keys(designationTasks);
   const getTasksForDesignation = (desig?: string) => {
-    return designationTasks[desig || 'Agent'] || ['On Shift', 'Team Meeting'];
+    const d = desig || currentUser.designation || 'Agent';
+    const tasks = designationTasks[d] || ['On Shift', 'Team Meeting'];
+    if (d === 'Agent' || d === 'Outbound Agent/Team') {
+      return tasks.filter((t) => t !== 'Email Interaction');
+    }
+    return tasks;
   };
 
   const addDesignation = (name: string, initialTasks?: string[]) => {};

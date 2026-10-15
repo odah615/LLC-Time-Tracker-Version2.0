@@ -176,9 +176,11 @@ export const EmployeeDetailsView: React.FC<EmployeeDetailsViewProps> = ({
   };
 
   const getTeamLeaderName = (leaderId?: string) => {
-    if (!leaderId) return 'None / Direct';
-    const leader = users.find((u) => u.id === leaderId || u.employeeCode === leaderId);
-    return leader ? leader.name : leaderId;
+    if (!leaderId) return 'Admin';
+    if (leaderId === 'usr-superadmin-red' || leaderId.toLowerCase() === 'superadmin') return 'Admin';
+    if (leaderId === 'usr-llc-0003' || leaderId.toUpperCase() === 'LLC-0003') return 'trainer';
+    const leader = users.find((u) => u.id === leaderId || u.employeeCode === leaderId || u.username === leaderId);
+    return leader ? (leader.username || leader.name) : leaderId;
   };
 
   return (
