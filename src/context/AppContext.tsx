@@ -551,6 +551,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsTracking(true);
       setIsPaused(false);
       setTaskSwitchPending(null);
+      sessionStartTimestampRef.current = Date.now();
     }
   };
 
@@ -562,14 +563,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsTracking(true);
     setIsPaused(false);
     setElapsedSeconds(0);
+    sessionStartTimestampRef.current = Date.now();
   };
 
   const pauseTracking = () => {
     setIsPaused(true);
+    sessionStartTimestampRef.current = 0;
   };
 
   const resumeTracking = () => {
     setIsPaused(false);
+    sessionStartTimestampRef.current = Date.now() - (elapsedSeconds * 1000);
   };
 
   const stopTracking = () => {
@@ -604,6 +608,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsTracking(false);
     setIsPaused(false);
     setElapsedSeconds(0);
+    sessionStartTimestampRef.current = 0;
   };
 
   const getTodayTrackedSeconds = useCallback((): number => {
@@ -843,6 +848,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const elapsedSecondsRef = useRef(elapsedSeconds);
   elapsedSecondsRef.current = elapsedSeconds;
 
+  const sessionStartTimestampRef = useRef<number>(0);
+
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
 
@@ -876,11 +883,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     let interval: any = null;
     if (isTracking && !isPaused) {
-      interval = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
+      if (!sessionStartTimestampRef.current) {
+        sessionStartTimestampRef.current = Date.now() - (elapsedSeconds * 1000);
+      }
+      const updateTimer = () => {
+        if (sessionStartTimestampRef.current) {
+          const diff = Math.floor((Date.now() - sessionStartTimestampRef.current) / 1000);
+          setElapsedSeconds(Math.max(0, diff));
+        }
+      };
+      updateTimer();
+      interval = setInterval(updateTimer, 500);
+
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          updateTimer();
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('focus', updateTimer);
+
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('focus', updateTimer);
+      };
+    } else {
+      sessionStartTimestampRef.current = 0;
     }
-    return () => clearInterval(interval);
   }, [isTracking, isPaused]);
 
   // Objective 1: 3-Minute Heartbeat (Live_Presence only)
