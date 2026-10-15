@@ -18,33 +18,66 @@ export const AdminTaskTimerWidget: React.FC = () => {
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showSavedToast, setShowSavedToast] = useState(false);
+  const startEpochRef = React.useRef<number>(0);
+  const accumulatedSecRef = React.useRef<number>(0);
 
   useEffect(() => {
     let interval: any = null;
+    const updateTimer = () => {
+      if (isTimerRunning && startEpochRef.current > 0) {
+        const diff = Math.floor((Date.now() - startEpochRef.current) / 1000);
+        setElapsedSeconds(accumulatedSecRef.current + Math.max(0, diff));
+      }
+    };
+
     if (isTimerRunning) {
-      interval = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
+      updateTimer();
+      interval = setInterval(updateTimer, 500);
+      const handleVis = () => {
+        if (document.visibilityState === 'visible') updateTimer();
+      };
+      document.addEventListener('visibilitychange', handleVis);
+      window.addEventListener('focus', updateTimer);
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', handleVis);
+        window.removeEventListener('focus', updateTimer);
+      };
     } else if (interval) {
       clearInterval(interval);
     }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
   }, [isTimerRunning]);
 
   const handleStartPause = () => {
-    setIsTimerRunning(!isTimerRunning);
+    if (!isTimerRunning) {
+      startEpochRef.current = Date.now();
+      setIsTimerRunning(true);
+    } else {
+      if (startEpochRef.current > 0) {
+        const diff = Math.floor((Date.now() - startEpochRef.current) / 1000);
+        accumulatedSecRef.current += Math.max(0, diff);
+      }
+      startEpochRef.current = 0;
+      setIsTimerRunning(false);
+    }
   };
 
   const handleStopAndSave = () => {
-    if (elapsedSeconds < 10) {
+    let currentTotal = accumulatedSecRef.current;
+    if (isTimerRunning && startEpochRef.current > 0) {
+      currentTotal += Math.floor((Date.now() - startEpochRef.current) / 1000);
+    }
+    const finalSecs = Math.max(0, currentTotal);
+
+    if (finalSecs < 10) {
       setIsTimerRunning(false);
       setElapsedSeconds(0);
+      startEpochRef.current = 0;
+      accumulatedSecRef.current = 0;
       return;
     }
     const now = new Date();
-    const startTimeStr = new Date(now.getTime() - elapsedSeconds * 1000)
+    const startTimeStr = new Date(now.getTime() - finalSecs * 1000)
       .toTimeString()
       .split(' ')[0]
       .substring(0, 5);
@@ -52,12 +85,13 @@ export const AdminTaskTimerWidget: React.FC = () => {
 
     addTimeLog({
       userId: currentUser.id,
+      employeeCode: currentUser.employeeCode,
       userName: currentUser.name,
       userAvatar: currentUser.avatar || '',
       date: now.toISOString().split('T')[0],
       startTime: startTimeStr,
       endTime: endTimeStr,
-      durationSeconds: elapsedSeconds,
+      durationSeconds: finalSecs,
       task: selectedTask,
       designation: currentUser.designation,
       status: 'completed',
@@ -72,6 +106,8 @@ export const AdminTaskTimerWidget: React.FC = () => {
 
     setIsTimerRunning(false);
     setElapsedSeconds(0);
+    startEpochRef.current = 0;
+    accumulatedSecRef.current = 0;
     setShowSavedToast(true);
     setTimeout(() => setShowSavedToast(false), 3500);
   };

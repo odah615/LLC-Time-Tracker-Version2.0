@@ -24,7 +24,7 @@ import { User } from './types';
 import { Clock, Globe, Laptop, LogOut, RefreshCw, ArrowUpCircle } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
-  const { currentUser, isAuthenticated, isTracking, isDesktopDockView, logout, saveToast, setSaveToast } = useApp();
+  const { currentUser, isAuthenticated, isTracking, isDesktopDockView, setIsDesktopDockView, logout, saveToast, setSaveToast } = useApp();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [showUpdateSuccess, setShowUpdateSuccess] = useState(false);
@@ -99,16 +99,19 @@ const MainAppContent: React.FC = () => {
               <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
               <span>{isCheckingUpdate ? 'Syncing...' : showUpdateSuccess ? 'Up to Date!' : 'Check Updates'}</span>
             </button>
-            <a
-              href={`${currentWebUrl}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-all"
-              title="Open Web Dashboard Portal in Browser Tab"
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined' && currentWebUrl) {
+                  window.open(currentWebUrl, '_blank', 'noopener,noreferrer');
+                }
+              }}
+              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+              title="Open Web Dashboard Portal in external browser window (desktop tracker remains active)"
             >
-              <Globe className="w-3.5 h-3.5 text-blue-400" />
+              <Globe className="w-3.5 h-3.5 text-white" />
               <span>Web Portal</span>
-            </a>
+            </button>
             <button
               onClick={() => logout()}
               className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-red-950 hover:text-red-300 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"

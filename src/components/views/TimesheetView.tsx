@@ -28,6 +28,7 @@ import {
   Copy,
   AlertTriangle,
   Code,
+  Download,
 } from 'lucide-react';
 import {
   BarChart,
@@ -49,7 +50,7 @@ interface TimesheetViewProps {
   isPersonalOnly?: boolean;
 }
 
-type ViewTabMode = 'daily' | 'weekly' | 'monthly';
+type ViewTabMode = 'daily' | 'weekly' | 'monthly' | 'summary';
 
 export const TimesheetView: React.FC<TimesheetViewProps> = ({
   onOpenManualModal,
@@ -496,27 +497,37 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
         )
     );
 
-    const runningSeconds = isTracking
-      ? Math.max(0, elapsedSeconds || 0)
-      : Math.max(
-          0,
-          Number(liveLog?.durationSeconds || 0),
-          Number(presence?.elapsedSeconds || 0)
-        );
-
-    const idleSeconds = Math.max(
-      0,
-      Number(
-        presence?.idleDeductionSeconds ||
-          (liveLog as any)?.idleSeconds ||
-          0
-      )
+    const isCurrentlyActive = Boolean(
+      isTracking ||
+      (presence && presence.isTracking === true) ||
+      (liveLog && (liveLog.status === 'running' || liveLog.endTime === 'Running Live'))
     );
+
+    const runningSeconds = isCurrentlyActive
+      ? (isTracking
+          ? Math.max(0, elapsedSeconds || 0)
+          : Math.max(
+              0,
+              Number(liveLog?.durationSeconds || 0),
+              Number(presence?.elapsedSeconds || 0)
+            ))
+      : 0;
+
+    const idleSeconds = isCurrentlyActive
+      ? Math.max(
+          0,
+          Number(
+            presence?.idleDeductionSeconds ||
+              (liveLog as any)?.idleSeconds ||
+              0
+          )
+        )
+      : 0;
 
     const activity = Math.round(
       (
-        Number(presence?.mouseActivity ?? liveLog?.mouseActivityAvg ?? 0) +
-        Number(presence?.keyboardActivity ?? liveLog?.keyboardActivityAvg ?? 0)
+        Number(presence?.mouseActivity ?? liveLog?.mouseActivityAvg ?? 95) +
+        Number(presence?.keyboardActivity ?? liveLog?.keyboardActivityAvg ?? 90)
       ) / 2
     );
 
@@ -752,6 +763,114 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       'download',
       `LLC_Time_Tracker_V2_${isPersonalView ? 'My_Personal' : 'Team'}_Timesheet_${getPeriodLabel().replace(/[^a-zA-Z0-9]/g, '_')}.csv`
     );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const dailySummaryList = useMemo(() => {
+    const groups = new Map<string, TimeLog[]>();
+    filteredLogs.forEach((l) => {
+      const d = l.date || (l.startTime ? l.startTime.split('T')[0] : todayStr);
+      const empCode = (l as any).employeeCode || l.userId || 'UNKNOWN';
+      const key = `${d}__${empCode}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(l);
+    });
+
+    return Array.from(groups.entries()).map(([key, logs]) => {
+      const [logDate, empCode] = key.split('__');
+      const first = logs[0];
+      const tasks = Array.from(new Set(logs.map((l) => l.task).filter(Boolean))).join(', ');
+
+      // Filter out duplicate running segments: keep completed logs + only the single latest running segment
+      const completedLogs = logs.filter((l) => l.status === 'completed');
+      const runningLogs = logs.filter((l) => l.status === 'running' || l.endTime === 'Running Live');
+      const latestRunningLog = runningLogs.length > 0 ? runningLogs[runningLogs.length - 1] : null;
+
+      const consolidatedLogs = latestRunningLog ? [...completedLogs, latestRunningLog] : completedLogs;
+      const logsForTiming = consolidatedLogs.length > 0 ? consolidatedLogs : logs;
+
+      const sorted = [...logsForTiming].sort((a, b) => {
+        const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
+        const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
+        return ta - tb;
+      });
+      const earliest = sorted[0];
+      const latest = sorted[sorted.length - 1];
+
+      const isRunning = logs.some((l) => l.status === 'running' || l.endTime === 'Running Live');
+      const firstClockIn = earliest?.geoLocalStartTime || earliest?.startTime || '09:00:00 AM';
+      const lastClockOut = isRunning ? 'Running Live' : (latest?.geoLocalEndTime || latest?.endTime || '05:00:00 PM');
+
+      const grossSec = consolidatedLogs.reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
+      const idleSec = consolidatedLogs.reduce((acc, l) => acc + Math.max(0, Number(l.idleSeconds) || 0), 0);
+      const netSec = Math.max(0, grossSec - idleSec);
+
+      const avgAct = Math.round(
+        consolidatedLogs.reduce((acc, l) => acc + (Number(l.mouseActivityAvg || 95) + Number(l.keyboardActivityAvg || 90)) / 2, 0) /
+          (consolidatedLogs.length || 1)
+      );
+
+      return {
+        date: logDate,
+        employeeCode: empCode,
+        employeeName: first?.userName || empCode,
+        designation: first?.designation || 'Agent',
+        tasksWorkedOn: tasks || 'Active Shift',
+        firstClockIn,
+        lastClockOut,
+        grossTrackedShift: formatTotalTime(grossSec),
+        totalIdleBreaks: formatTotalTime(idleSec),
+        netProductiveWork: formatTotalTime(netSec),
+        durationSeconds: netSec,
+        avgActivity: `${avgAct}%`,
+        shiftStatus: isRunning ? 'Active Shift' : 'Shift Completed',
+        logEntries: consolidatedLogs.length,
+      };
+    });
+  }, [filteredLogs, todayStr]);
+
+  const handleExportDailySummaryCSV = () => {
+    const headers = [
+      'Date',
+      'Employee Code',
+      'Employee Name',
+      'Designation',
+      'Tasks Worked On',
+      'First Clock-In (Manila GMT+8)',
+      'Last Clock-Out (Manila GMT+8)',
+      'Gross Tracked Shift',
+      'Total Idle / Breaks',
+      'Net Productive Work',
+      'Duration (Seconds)',
+      'Avg Activity %',
+      'Shift Status',
+      'Log Entries',
+    ];
+    const rows = dailySummaryList.map((s) => [
+      s.date,
+      `"${s.employeeCode}"`,
+      `"${s.employeeName}"`,
+      `"${s.designation}"`,
+      `"${s.tasksWorkedOn}"`,
+      `"${s.firstClockIn}"`,
+      `"${s.lastClockOut}"`,
+      `"${s.grossTrackedShift}"`,
+      `"${s.totalIdleBreaks}"`,
+      `"${s.netProductiveWork}"`,
+      s.durationSeconds,
+      `"${s.avgActivity}"`,
+      `"${s.shiftStatus}"`,
+      s.logEntries,
+    ]);
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `LLC_Time_Tracker_V2_Daily_Summary_${todayStr}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1001,6 +1120,16 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             >
               Monthly View
             </button>
+            <button
+              onClick={() => handleTabSwitch('summary')}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                viewTab === 'summary'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Daily Summary (Spreadsheet)
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
@@ -1045,87 +1174,175 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-          <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider">
-            {isPersonalView ? 'My Detailed Session Logs' : 'Detailed Itemized Session Logs'} ({filteredLogs.length} Entries)
-          </h4>
-        </div>
-        {filteredLogs.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 text-xs">
-            No itemized logs match your filters.
+      {viewTab === 'summary' ? (
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                Google Sheets Daily_Summary Worksheet ({dailySummaryList.length} Staff Days)
+              </h4>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Executive daily aggregates matching the Google Spreadsheet schema with net productive hours and shift status.
+              </p>
+            </div>
+            <button
+              onClick={handleExportDailySummaryCSV}
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" /> Export Daily Summary CSV
+            </button>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-100/50 text-slate-500 font-bold uppercase tracking-wider">
-                <tr>
-                  {!isPersonalView && <th className="py-3 px-4">Agent</th>}
-                  <th className="py-3 px-4">Task Category</th>
-                  <th className="py-3 px-4">Date & Start Time</th>
-                  <th className="py-3 px-4">End Time</th>
-                  <th className="py-3 px-4">Duration (s)</th>
-                  <th className="py-3 px-4 text-slate-800">Total Time</th>
-                  <th className="py-3 px-4">Activity Score</th>
-                  <th className="py-3 px-4">Notes</th>
-                  {!isPersonalView && currentUser.role === 'admin' && (
-                    <th className="py-3 px-4 text-right">Action</th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-800">
-                {paginatedLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
-                    {!isPersonalView && (
-                      <td className="py-3 px-4 font-medium text-slate-900">
-                        {log.userName}
+          {dailySummaryList.length === 0 ? (
+            <div className="text-center py-8 text-slate-500 text-xs">
+              No daily summaries available for the selected filters.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead className="bg-slate-100/70 text-slate-600 font-bold uppercase tracking-wider text-[11px]">
+                  <tr>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Employee Code</th>
+                    <th className="py-3 px-4">Employee Name</th>
+                    <th className="py-3 px-4">Designation</th>
+                    <th className="py-3 px-4">Tasks Worked On</th>
+                    <th className="py-3 px-4">First Clock-In</th>
+                    <th className="py-3 px-4">Last Clock-Out</th>
+                    <th className="py-3 px-4">Gross Tracked</th>
+                    <th className="py-3 px-4">Total Idle/Breaks</th>
+                    <th className="py-3 px-4 text-emerald-700">Net Productive Work</th>
+                    <th className="py-3 px-4">Duration (s)</th>
+                    <th className="py-3 px-4">Avg Activity</th>
+                    <th className="py-3 px-4">Shift Status</th>
+                    <th className="py-3 px-4">Logs</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {dailySummaryList.map((row, idx) => (
+                    <tr key={`${row.date}-${row.employeeCode}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3 px-4 font-mono font-semibold text-slate-700">{row.date}</td>
+                      <td className="py-3 px-4 font-mono font-bold text-blue-700">{row.employeeCode}</td>
+                      <td className="py-3 px-4 font-semibold text-slate-900">{row.employeeName}</td>
+                      <td className="py-3 px-4 text-slate-600">{row.designation}</td>
+                      <td className="py-3 px-4 text-slate-600 max-w-xs truncate" title={row.tasksWorkedOn}>{row.tasksWorkedOn}</td>
+                      <td className="py-3 px-4 font-mono text-slate-700">{row.firstClockIn}</td>
+                      <td className="py-3 px-4 font-mono text-slate-700">
+                        {row.lastClockOut === 'Running Live' ? (
+                          <span className="text-emerald-600 font-bold animate-pulse">Running Live</span>
+                        ) : (
+                          row.lastClockOut
+                        )}
                       </td>
-                    )}
-                    <td className="py-3 px-4 font-semibold text-blue-700">
-                      {log.task}
-                    </td>
-                    <td className="py-3 px-4 font-mono">
-                      {log.date} • {log.geoLocalStartTime || '—'}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-600">
-                      {log.endTime === 'Running Live' ||
-                      log.endTime === 'In Progress (Live)' ||
-                      log.status === 'running'
-                        ? 'Running Live'
-                        : (log.geoLocalEndTime || '—')}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-500">
-                      {log.durationSeconds}s
-                    </td>
-                    <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                      <span className="bg-blue-50 text-blue-800 border border-blue-200/60 px-2 py-0.5 rounded font-mono font-bold">
-                        {formatTotalTime(log.durationSeconds)}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-mono font-bold text-emerald-600">
-                      {Math.round((log.mouseActivityAvg + log.keyboardActivityAvg) / 2)}%
-                    </td>
-                    <td className="py-3 px-4 text-slate-500 max-w-xs truncate" title={log.notes}>
-                      {log.notes || 'Automated session log'}
-                    </td>
+                      <td className="py-3 px-4 font-mono font-bold text-slate-800">{row.grossTrackedShift}</td>
+                      <td className="py-3 px-4 font-mono text-amber-600 font-semibold">{row.totalIdleBreaks}</td>
+                      <td className="py-3 px-4 font-mono font-bold text-emerald-700">
+                        <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded font-mono font-bold">
+                          {row.netProductiveWork}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-500">{row.durationSeconds}s</td>
+                      <td className="py-3 px-4 font-mono font-bold text-emerald-600">{row.avgActivity}</td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          row.shiftStatus === 'Active Shift'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse'
+                            : 'bg-slate-100 text-slate-700 border border-slate-200'
+                        }`}>
+                          {row.shiftStatus}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-center font-semibold text-slate-600">{row.logEntries}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider">
+              {isPersonalView ? 'My Detailed Session Logs' : 'Detailed Itemized Session Logs'} ({filteredLogs.length} Entries)
+            </h4>
+          </div>
+          {filteredLogs.length === 0 ? (
+            <div className="text-center py-8 text-slate-500 text-xs">
+              No itemized logs match your filters.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100/50 text-slate-500 font-bold uppercase tracking-wider">
+                  <tr>
+                    {!isPersonalView && <th className="py-3 px-4">Agent</th>}
+                    <th className="py-3 px-4">Task Category</th>
+                    <th className="py-3 px-4">Date & Start Time</th>
+                    <th className="py-3 px-4">End Time</th>
+                    <th className="py-3 px-4">Duration (s)</th>
+                    <th className="py-3 px-4 text-slate-800">Total Time</th>
+                    <th className="py-3 px-4">Activity Score</th>
+                    <th className="py-3 px-4">Notes</th>
                     {!isPersonalView && currentUser.role === 'admin' && (
-                      <td className="py-3 px-4 text-right">
-                        <button
-                          onClick={() => deleteTimeLog(log.id)}
-                          className="p-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all cursor-pointer"
-                          title="Delete entry (Super Admin Only)"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
+                      <th className="py-3 px-4 text-right">Action</th>
                     )}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {paginatedLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
+                      {!isPersonalView && (
+                        <td className="py-3 px-4 font-medium text-slate-900">
+                          {log.userName}
+                        </td>
+                      )}
+                      <td className="py-3 px-4 font-semibold text-blue-700">
+                        {log.task}
+                      </td>
+                      <td className="py-3 px-4 font-mono">
+                        {log.date} • {log.geoLocalStartTime || '—'}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-600">
+                        {log.endTime === 'Running Live' ||
+                        log.endTime === 'In Progress (Live)' ||
+                        log.status === 'running'
+                          ? 'Running Live'
+                          : (log.geoLocalEndTime || '—')}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-500">
+                        {log.durationSeconds}s
+                      </td>
+                      <td className="py-3 px-4 font-mono font-bold text-slate-900">
+                        <span className="bg-blue-50 text-blue-800 border border-blue-200/60 px-2 py-0.5 rounded font-mono font-bold">
+                          {formatTotalTime(log.durationSeconds)}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-mono font-bold text-emerald-600">
+                        {Math.round((log.mouseActivityAvg + log.keyboardActivityAvg) / 2)}%
+                      </td>
+                      <td className="py-3 px-4 text-slate-500 max-w-xs truncate" title={log.notes}>
+                        {log.notes || 'Automated session log'}
+                      </td>
+                      {!isPersonalView && currentUser.role === 'admin' && (
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => deleteTimeLog(log.id)}
+                            className="p-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all cursor-pointer"
+                            title="Delete entry (Super Admin Only)"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

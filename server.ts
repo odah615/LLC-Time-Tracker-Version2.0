@@ -2,7 +2,11 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
+
+dotenv.config();
+
 
 const app = express();
 const PORT = 3000;
@@ -253,7 +257,8 @@ const cleanStalePresence = () => {
   for (const [userId, p] of Object.entries(bridgeState.presence)) {
     if (p && p.isOnline) {
       const lastHbMs = p.lastHeartbeat ? new Date(p.lastHeartbeat).getTime() : 0;
-      const timeoutMs = p.isTracking ? 180000 : 90000;
+      // 10 minutes timeout if tracking (supports 3-minute heartbeat comfortably), 5 minutes if standby
+      const timeoutMs = p.isTracking ? 600000 : 300000;
       if (lastHbMs > 0 && now - lastHbMs > timeoutMs) {
         bridgeState.presence[userId] = {
           ...p,
@@ -442,39 +447,212 @@ app.post('/api/presence', (req, res) => {
     return res.status(400).json({ error: 'Missing userId in presence payload' });
   }
   const existing = bridgeState.presence[p.userId] || {};
+  const isOffline = p.isOnline === false || p.status === 'offline';
   bridgeState.presence[p.userId] = {
     ...existing,
     ...p,
+    isOnline: !isOffline,
+    status: isOffline ? 'offline' : (p.status || 'online'),
+    isTracking: isOffline ? false : (p.isTracking ?? existing.isTracking ?? false),
+    isPaused: isOffline ? false : (p.isPaused ?? existing.isPaused ?? false),
+    currentTask: isOffline ? 'Shift Concluded' : (p.currentTask || existing.currentTask || 'Active Shift'),
+    currentApp: isOffline ? 'None' : (p.currentApp || existing.currentApp || 'Desktop Software'),
     lastHeartbeat: p.lastHeartbeat || new Date().toISOString(),
   };
   persistBridgeState();
+
+  // Asynchronously attempt upstream transmission if configured
+  const scriptUrl = process.env.APPS_SCRIPT_URL || bridgeState.config.webhookUrl;
+  if (scriptUrl) {
+    fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'HEARTBEAT_UPDATE',
+        ...bridgeState.presence[p.userId],
+      }),
+    }).catch(() => {});
+  }
+
   res.json({ success: true, presence: bridgeState.presence[p.userId] });
 });
 
 app.get('/api/timelogs', (req, res) => {
-  res.json({ success: true, timeLogs: bridgeState.timelogs });
+  const { userId, date } = req.query as { userId?: string; date?: string };
+  let logs = bridgeState.timelogs;
+
+  if (userId && typeof userId === 'string') {
+    const q = userId.trim().toLowerCase();
+    logs = logs.filter((l) => {
+      const uId = String(l.userId || '').toLowerCase();
+      const uCode = String(l.employeeCode || '').toLowerCase();
+      return uId === q || uCode === q;
+    });
+  }
+
+  if (date && typeof date === 'string') {
+    logs = logs.filter((l) => l.date === date);
+  }
+
+  res.json({ success: true, timeLogs: logs });
 });
 
 app.post('/api/timelogs', (req, res) => {
   const incoming = req.body;
-  if (Array.isArray(incoming)) {
-    const map = new Map<string, any>(bridgeState.timelogs.map((l) => [l.id, l]));
-    for (const rawLog of incoming) {
-      if (rawLog && rawLog.id) {
-        map.set(rawLog.id, rawLog);
+  const list = Array.isArray(incoming) ? incoming : (incoming && incoming.id ? [incoming] : []);
+
+  if (list.length === 0) {
+    return res.status(400).json({ error: 'Invalid timelog payload' });
+  }
+
+  const map = new Map<string, any>(bridgeState.timelogs.map((l) => [l.id, l]));
+
+  for (const rawLog of list) {
+    if (rawLog && rawLog.id) {
+      const canonicalCode = String(rawLog.employeeCode || rawLog.userId || '').trim().toLowerCase();
+      if (!canonicalCode) continue;
+
+      // Validate segment ownership if updating an active running segment
+      const isSegmentId = String(rawLog.id).startsWith('active-seg-') || String(rawLog.id).startsWith('seg-running-');
+      if (isSegmentId) {
+        const existing = map.get(rawLog.id);
+        if (existing) {
+          const existingCode = String(existing.employeeCode || existing.userId || '').trim().toLowerCase();
+          if (existingCode && existingCode !== canonicalCode) {
+            console.warn(`[Timelogs] Cross-employee task segment update blocked: ${canonicalCode} cannot modify segment of ${existingCode}`);
+            continue;
+          }
+        }
+      }
+
+      // If completing a task segment, close and clean up ONLY the active running segments for THIS specific employee
+      if (rawLog.status === 'completed') {
+        for (const [k, existing] of map.entries()) {
+          const existingCode = String(existing.employeeCode || existing.userId || '').trim().toLowerCase();
+          if (
+            existingCode === canonicalCode &&
+            (existing.status === 'running' || String(k).startsWith('active-seg-') || String(k).startsWith('seg-running-'))
+          ) {
+            map.delete(k);
+          }
+        }
+      }
+
+      map.set(rawLog.id, rawLog);
+    }
+  }
+
+  bridgeState.timelogs = Array.from(map.values());
+  persistBridgeState();
+
+  // Asynchronously attempt upstream transmission if configured
+  const scriptUrl = process.env.APPS_SCRIPT_URL || bridgeState.config.webhookUrl;
+  if (scriptUrl) {
+    fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: process.env.LLCTRACKERV2_SHARED_SECRET,
+        action: 'SYNC_TIMELOGS',
+        timeLogs: list,
+      }),
+    }).catch(() => {});
+  }
+
+  return res.json({ success: true, count: bridgeState.timelogs.length });
+});
+
+// GET /api/daily-summary: Computes exact daily summary according to SPREADSHEET_SCHEMA Daily_Summary tab
+app.get('/api/daily-summary', (req, res) => {
+  const { date, userId } = req.query as { date?: string; userId?: string };
+  const allLogs = bridgeState.timelogs;
+
+  interface GroupKey {
+    date: string;
+    employeeCode: string;
+  }
+
+  const groups = new Map<string, any[]>();
+  for (const l of allLogs) {
+    if (!l.date) continue;
+    if (date && l.date !== date) continue;
+    const empCode = l.employeeCode || l.userId || 'UNKNOWN';
+    if (userId) {
+      const q = userId.trim().toLowerCase();
+      if (String(l.userId || '').toLowerCase() !== q && String(empCode).toLowerCase() !== q) {
+        continue;
       }
     }
-    bridgeState.timelogs = Array.from(map.values());
-    persistBridgeState();
-    return res.json({ success: true, count: bridgeState.timelogs.length });
-  } else if (incoming && incoming.id) {
-    const map = new Map<string, any>(bridgeState.timelogs.map((l) => [l.id, l]));
-    map.set(incoming.id, incoming);
-    bridgeState.timelogs = Array.from(map.values());
-    persistBridgeState();
-    return res.json({ success: true, log: incoming });
+    const key = `${l.date}__${empCode}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(l);
   }
-  res.status(400).json({ error: 'Invalid timelog payload' });
+
+  const summaries = Array.from(groups.entries()).map(([key, logs]) => {
+    const [logDate, empCode] = key.split('__');
+    const firstLog = logs[0] || {};
+    const empName = firstLog.userName || empCode;
+    const designation = firstLog.designation || 'Agent';
+
+    const tasks = Array.from(new Set(logs.map((l) => l.task).filter(Boolean))).join(', ');
+
+    // Filter out duplicate running segments: keep completed logs + only the single latest running segment
+    const completedLogs = logs.filter((l) => l.status === 'completed');
+    const runningLogs = logs.filter((l) => l.status === 'running' || l.endTime === 'Running Live');
+    const latestRunningLog = runningLogs.length > 0 ? runningLogs[runningLogs.length - 1] : null;
+
+    const consolidatedLogs = latestRunningLog ? [...completedLogs, latestRunningLog] : completedLogs;
+    const logsForTiming = consolidatedLogs.length > 0 ? consolidatedLogs : logs;
+
+    // Sort by startTime
+    const sorted = [...logsForTiming].sort((a, b) => {
+      const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
+      const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
+      return ta - tb;
+    });
+
+    const earliest = sorted[0];
+    const latest = sorted[sorted.length - 1];
+
+    const firstClockIn = earliest?.geoLocalStartTime || earliest?.startTime || '09:00:00 AM';
+    const isCurrentlyRunning = logs.some((l) => l.status === 'running' || l.endTime === 'Running Live');
+    const lastClockOut = isCurrentlyRunning ? 'Running Live' : (latest?.geoLocalEndTime || latest?.endTime || '05:00:00 PM');
+
+    const grossSeconds = consolidatedLogs.reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
+    const totalIdleSeconds = consolidatedLogs.reduce((acc, l) => acc + Math.max(0, Number(l.idleSeconds) || 0), 0);
+    const netSeconds = Math.max(0, grossSeconds - totalIdleSeconds);
+
+    const formatSecs = (sec: number) => {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      return h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+    };
+
+    const avgAct = Math.round(
+      consolidatedLogs.reduce((acc, l) => acc + (Number(l.mouseActivityAvg || 95) + Number(l.keyboardActivityAvg || 90)) / 2, 0) /
+        (consolidatedLogs.length || 1)
+    );
+
+    return {
+      date: logDate,
+      employeeCode: empCode,
+      employeeName: empName,
+      designation,
+      tasksWorkedOn: tasks || 'Active Shift',
+      firstClockIn,
+      lastClockOut,
+      grossTrackedShift: formatSecs(grossSeconds),
+      totalIdleBreaks: formatSecs(totalIdleSeconds),
+      netProductiveWork: formatSecs(netSeconds),
+      durationSeconds: netSeconds,
+      avgActivity: `${avgAct}%`,
+      shiftStatus: isCurrentlyRunning ? 'Active Shift' : 'Shift Completed',
+      logEntries: consolidatedLogs.length,
+    };
+  });
+
+  res.json({ success: true, summaries });
 });
 
 app.get('/api/users', (req, res) => {
@@ -502,6 +680,69 @@ app.post('/api/users', (req, res) => {
     return res.json({ success: true, user: sanitizeUser(incoming) });
   }
   res.status(400).json({ error: 'Invalid user payload' });
+});
+
+// POST /api/sync-sheets: Full bidirectional synchronization proxy
+app.post('/api/sync-sheets', async (req, res) => {
+  const { webhookUrl, payload } = req.body || {};
+  const cleanUrl = webhookUrl || process.env.APPS_SCRIPT_URL || bridgeState.config.webhookUrl;
+
+  try {
+    if (payload && typeof payload === 'object') {
+      if (Array.isArray(payload.timeLogs)) {
+        const map = new Map<string, any>(bridgeState.timelogs.map((l) => [l.id, l]));
+        for (const l of payload.timeLogs) {
+          if (l && l.id) map.set(l.id, l);
+        }
+        bridgeState.timelogs = Array.from(map.values());
+      }
+      if (Array.isArray(payload.users)) {
+        const map = new Map<string, any>(bridgeState.users.map((u) => [u.id, u]));
+        for (const u of payload.users) {
+          if (u && u.id) map.set(u.id, u);
+        }
+        bridgeState.users = Array.from(map.values());
+      }
+      if (Array.isArray(payload.userPresenceList)) {
+        for (const p of payload.userPresenceList) {
+          if (p && p.userId) bridgeState.presence[p.userId] = p;
+        }
+      }
+      persistBridgeState();
+    }
+
+    if (cleanUrl) {
+      try {
+        const upstreamRes = await fetch(cleanUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || { action: 'SYNC_ALL' }),
+        });
+        const respText = await upstreamRes.text();
+        let upstreamJson: any = {};
+        try {
+          upstreamJson = JSON.parse(respText);
+        } catch {
+          upstreamJson = { status: 'SUCCESS', message: respText };
+        }
+        return res.json({
+          success: true,
+          message: 'Successfully synchronized to Google Sheets and Central Server.',
+          result: upstreamJson,
+        });
+      } catch (err: any) {
+        console.warn('[Sync-Sheets] Upstream push notice:', err?.message || err);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'State synchronized successfully to Central Bridge.',
+      result: { status: 'SUCCESS' },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || err });
+  }
 });
 
 app.all('/api/*', (req, res) => {

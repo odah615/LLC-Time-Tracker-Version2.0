@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   User,
   TimeLog,
@@ -367,7 +367,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return typeof window !== 'undefined' && localStorage.getItem('trackpulse_auth') === 'true';
   });
 
-  const [loginMode, setLoginMode] = useState<'webapp' | 'software'>('webapp');
+  const isSoftwareEnvDetected = typeof window !== 'undefined' && (
+    window.location.search.includes('mode=desktop') ||
+    window.location.search.includes('appMode=desktop') ||
+    window.location.search.includes('source=software') ||
+    window.location.search.includes('mode=software') ||
+    localStorage.getItem('trackpulse_login_mode') === 'software' ||
+    navigator.userAgent.includes('Electron') ||
+    (window as any).isElectronApp === true ||
+    Boolean((window as any).electronAPI)
+  );
+
+  const [loginMode, setLoginMode] = useState<'webapp' | 'software'>(() => {
+    return isSoftwareEnvDetected ? 'software' : 'webapp';
+  });
   const [timeLogs, setTimeLogs] = useState<TimeLog[]>(() => {
     const saved = localStorage.getItem('trackpulse_timelogs');
     return saved ? JSON.parse(saved) : [];
@@ -407,12 +420,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('trackpulse_auto_sync_enabled', enabled ? 'true' : 'false');
   };
 
-  const [isTracking, setIsTracking] = useState<boolean>(false);
-  const [isPaused, setIsPaused] = useState<boolean>(false);
-  const [currentDesignation, setCurrentDesignation] = useState<Designation>(currentUser.designation || 'Agent');
-  const [currentTask, setCurrentTask] = useState<TaskCategory>('Email Reachout');
-  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
-  const [isDesktopDockView, setIsDesktopDockView] = useState<boolean>(false);
+  // Active Session Persistence Helpers
+  const getActiveSessionStorageKey = useCallback((code?: string): string => {
+    return `trackpulse_active_session_${(code || 'default').trim().toLowerCase()}`;
+  }, []);
+
+  const loadActiveSession = useCallback((code?: string) => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem(getActiveSessionStorageKey(code));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.taskStartTime && parsed.employeeCode) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  }, [getActiveSessionStorageKey]);
+
+  const initialActiveSession = useMemo(() => {
+    return loadActiveSession(currentUser.employeeCode || currentUser.id);
+  }, [currentUser.employeeCode, currentUser.id, loadActiveSession]);
+
+  const [isTracking, setIsTracking] = useState<boolean>(Boolean(initialActiveSession));
+  const [isPaused, setIsPaused] = useState<boolean>(Boolean(initialActiveSession?.isPaused));
+  const [currentDesignation, setCurrentDesignation] = useState<Designation>(
+    initialActiveSession?.designation || currentUser.designation || 'Agent'
+  );
+  const [currentTask, setCurrentTask] = useState<TaskCategory>(
+    initialActiveSession?.task || 'Email Reachout'
+  );
+
+  const taskStartTimeRef = useRef<number>(initialActiveSession?.taskStartTime || 0);
+  const accumulatedPausedMsRef = useRef<number>(initialActiveSession?.accumulatedPausedMs || 0);
+  const pauseStartTimeRef = useRef<number | null>(initialActiveSession?.pauseStartTime || null);
+  const lastHeartbeatEpochMsRef = useRef<number>(initialActiveSession?.lastHeartbeat || 0);
+  const last5mSyncEpochMsRef = useRef<number>(initialActiveSession?.lastSync5m || 0);
+
+  const computeElapsedSeconds = useCallback((): number => {
+    if (!taskStartTimeRef.current) return 0;
+    const now = Date.now();
+    const pausedAccum = accumulatedPausedMsRef.current || 0;
+    if (pauseStartTimeRef.current) {
+      return Math.max(0, Math.floor((pauseStartTimeRef.current - taskStartTimeRef.current - pausedAccum) / 1000));
+    }
+    return Math.max(0, Math.floor((now - taskStartTimeRef.current - pausedAccum) / 1000));
+  }, []);
+
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(() => {
+    if (initialActiveSession) {
+      const now = Date.now();
+      const paused = initialActiveSession.accumulatedPausedMs || 0;
+      if (initialActiveSession.isPaused && initialActiveSession.pauseStartTime) {
+        return Math.max(0, Math.floor((initialActiveSession.pauseStartTime - initialActiveSession.taskStartTime - paused) / 1000));
+      }
+      return Math.max(0, Math.floor((now - initialActiveSession.taskStartTime - paused) / 1000));
+    }
+    return 0;
+  });
+
+  const [isDesktopDockView, setIsDesktopDockView] = useState<boolean>(() => {
+    return isSoftwareEnvDetected;
+  });
 
   const [webSessionRemainingSeconds, setWebSessionRemainingSeconds] = useState<number>(600);
   const [isSessionWarningActive, setIsSessionWarningActive] = useState<boolean>(false);
@@ -519,8 +589,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (taskSwitchPending) {
       const now = new Date();
       const todayStr = getManilaDateString(now);
-      const duration = Math.max(1, elapsedSeconds);
-      const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
+      const startMs = taskStartTimeRef.current || (now.getTime() - elapsedSeconds * 1000);
+      const totalPaused = accumulatedPausedMsRef.current || (isPaused && pauseStartTimeRef.current ? (now.getTime() - pauseStartTimeRef.current) : 0);
+      const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
+      const startTimeIso = new Date(startMs).toISOString();
 
       if (isTracking && duration > 0) {
         addTimeLog({
@@ -535,7 +607,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           durationSeconds: duration,
           status: 'completed',
           geoTimezone: currentUser.geoTimezone || 'Asia/Manila',
-          geoLocalStartTime: getManilaTimeString(new Date(now.getTime() - duration * 1000)),
+          geoLocalStartTime: getManilaTimeString(new Date(startMs)),
           geoLocalEndTime: getManilaTimeString(now),
           mouseActivityAvg: 95,
           keyboardActivityAvg: 90,
@@ -546,12 +618,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
-      setCurrentTask(taskSwitchPending.targetTask);
+      const nextTask = taskSwitchPending.targetTask;
+      const newStartMs = Date.now();
+      taskStartTimeRef.current = newStartMs;
+      accumulatedPausedMsRef.current = 0;
+      pauseStartTimeRef.current = null;
+      lastHeartbeatEpochMsRef.current = newStartMs;
+      last5mSyncEpochMsRef.current = newStartMs;
+
+      setCurrentTask(nextTask);
       setElapsedSeconds(0);
       setIsTracking(true);
       setIsPaused(false);
       setTaskSwitchPending(null);
-      sessionStartTimestampRef.current = Date.now();
+
+      try {
+        const activeSessionData = {
+          employeeCode: currentUser.employeeCode || currentUser.id,
+          userId: currentUser.id,
+          task: nextTask,
+          designation: currentDesignation,
+          taskStartTime: newStartMs,
+          accumulatedPausedMs: 0,
+          isPaused: false,
+          pauseStartTime: null,
+          lastHeartbeat: newStartMs,
+          lastSync5m: newStartMs,
+        };
+        localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
+      } catch {}
+
+      syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+        userId: currentUser.id,
+        employeeCode: currentUser.employeeCode,
+        userName: currentUser.name,
+        role: currentUser.role,
+        designation: currentDesignation,
+        department: currentUser.department || 'Operations',
+        isOnline: true,
+        status: 'online',
+        isTracking: true,
+        isPaused: false,
+        currentTask: nextTask,
+        currentApp: currentActiveApp,
+        elapsedSeconds: 0,
+        lastHeartbeat: new Date().toISOString(),
+        loginPlatform: loginMode === 'software' ? 'software' : 'webapp',
+        timezone: 'Asia/Manila',
+      }).catch(() => {});
     }
   };
 
@@ -560,28 +674,154 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startTracking = () => {
+    const now = Date.now();
+    taskStartTimeRef.current = now;
+    accumulatedPausedMsRef.current = 0;
+    pauseStartTimeRef.current = null;
+    lastHeartbeatEpochMsRef.current = now;
+    last5mSyncEpochMsRef.current = now;
+
     setIsTracking(true);
     setIsPaused(false);
     setElapsedSeconds(0);
-    sessionStartTimestampRef.current = Date.now();
+
+    try {
+      const activeSessionData = {
+        employeeCode: currentUser.employeeCode || currentUser.id,
+        userId: currentUser.id,
+        task: currentTask,
+        designation: currentDesignation,
+        taskStartTime: now,
+        accumulatedPausedMs: 0,
+        isPaused: false,
+        pauseStartTime: null,
+        lastHeartbeat: now,
+        lastSync5m: now,
+      };
+      localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
+    } catch {}
+
+    syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+      userId: currentUser.id,
+      employeeCode: currentUser.employeeCode,
+      userName: currentUser.name,
+      role: currentUser.role,
+      designation: currentDesignation,
+      department: currentUser.department || 'Operations',
+      isOnline: true,
+      status: 'online',
+      isTracking: true,
+      isPaused: false,
+      currentTask,
+      currentApp: currentActiveApp,
+      elapsedSeconds: 0,
+      lastHeartbeat: new Date().toISOString(),
+      loginPlatform: loginMode === 'software' ? 'software' : 'webapp',
+      timezone: 'Asia/Manila',
+    }).catch(() => {});
   };
 
   const pauseTracking = () => {
+    if (!isTracking || isPaused) return;
+    const now = Date.now();
+    pauseStartTimeRef.current = now;
     setIsPaused(true);
-    sessionStartTimestampRef.current = 0;
+
+    const elapsed = computeElapsedSeconds();
+    setElapsedSeconds(elapsed);
+
+    try {
+      const activeSessionData = {
+        employeeCode: currentUser.employeeCode || currentUser.id,
+        userId: currentUser.id,
+        task: currentTask,
+        designation: currentDesignation,
+        taskStartTime: taskStartTimeRef.current,
+        accumulatedPausedMs: accumulatedPausedMsRef.current,
+        isPaused: true,
+        pauseStartTime: now,
+        lastHeartbeat: lastHeartbeatEpochMsRef.current,
+        lastSync5m: last5mSyncEpochMsRef.current,
+      };
+      localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
+    } catch {}
+
+    syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+      userId: currentUser.id,
+      employeeCode: currentUser.employeeCode,
+      userName: currentUser.name,
+      role: currentUser.role,
+      designation: currentDesignation,
+      department: currentUser.department || 'Operations',
+      isOnline: true,
+      status: 'idle',
+      isTracking: true,
+      isPaused: true,
+      currentTask,
+      currentApp: currentActiveApp,
+      elapsedSeconds: elapsed,
+      lastHeartbeat: new Date().toISOString(),
+      loginPlatform: loginMode === 'software' ? 'software' : 'webapp',
+      timezone: 'Asia/Manila',
+    }).catch(() => {});
   };
 
   const resumeTracking = () => {
+    if (!isTracking || !isPaused) return;
+    const now = Date.now();
+    if (pauseStartTimeRef.current) {
+      accumulatedPausedMsRef.current = (accumulatedPausedMsRef.current || 0) + (now - pauseStartTimeRef.current);
+    }
+    pauseStartTimeRef.current = null;
     setIsPaused(false);
-    sessionStartTimestampRef.current = Date.now() - (elapsedSeconds * 1000);
+
+    const elapsed = computeElapsedSeconds();
+    setElapsedSeconds(elapsed);
+
+    try {
+      const activeSessionData = {
+        employeeCode: currentUser.employeeCode || currentUser.id,
+        userId: currentUser.id,
+        task: currentTask,
+        designation: currentDesignation,
+        taskStartTime: taskStartTimeRef.current,
+        accumulatedPausedMs: accumulatedPausedMsRef.current,
+        isPaused: false,
+        pauseStartTime: null,
+        lastHeartbeat: lastHeartbeatEpochMsRef.current,
+        lastSync5m: last5mSyncEpochMsRef.current,
+      };
+      localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
+    } catch {}
+
+    syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+      userId: currentUser.id,
+      employeeCode: currentUser.employeeCode,
+      userName: currentUser.name,
+      role: currentUser.role,
+      designation: currentDesignation,
+      department: currentUser.department || 'Operations',
+      isOnline: true,
+      status: 'online',
+      isTracking: true,
+      isPaused: false,
+      currentTask,
+      currentApp: currentActiveApp,
+      elapsedSeconds: elapsed,
+      lastHeartbeat: new Date().toISOString(),
+      loginPlatform: loginMode === 'software' ? 'software' : 'webapp',
+      timezone: 'Asia/Manila',
+    }).catch(() => {});
   };
 
   const stopTracking = () => {
     if (!isTracking) return;
     const now = new Date();
     const todayStr = getManilaDateString(now);
-    const duration = Math.max(1, elapsedSeconds);
-    const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
+    const startMs = taskStartTimeRef.current || (now.getTime() - elapsedSeconds * 1000);
+    const totalPaused = accumulatedPausedMsRef.current || (isPaused && pauseStartTimeRef.current ? (now.getTime() - pauseStartTimeRef.current) : 0);
+    const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
+    const startTimeIso = new Date(startMs).toISOString();
 
     addTimeLog({
       userId: currentUser.id,
@@ -595,7 +835,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       durationSeconds: duration,
       status: 'completed',
       geoTimezone: currentUser.geoTimezone || 'Asia/Manila',
-      geoLocalStartTime: getManilaTimeString(new Date(now.getTime() - duration * 1000)),
+      geoLocalStartTime: getManilaTimeString(new Date(startMs)),
       geoLocalEndTime: getManilaTimeString(now),
       mouseActivityAvg: 95,
       keyboardActivityAvg: 90,
@@ -608,16 +848,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsTracking(false);
     setIsPaused(false);
     setElapsedSeconds(0);
-    sessionStartTimestampRef.current = 0;
+    taskStartTimeRef.current = 0;
+    accumulatedPausedMsRef.current = 0;
+    pauseStartTimeRef.current = null;
+
+    try {
+      localStorage.removeItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id));
+    } catch {}
+
+    syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+      userId: currentUser.id,
+      employeeCode: currentUser.employeeCode,
+      userName: currentUser.name,
+      role: currentUser.role,
+      designation: currentDesignation,
+      department: currentUser.department || 'Operations',
+      isOnline: true,
+      status: 'online',
+      isTracking: false,
+      isPaused: false,
+      currentTask: 'Shift Concluded',
+      currentApp: 'LLC-Time-Tracker-V2 Desktop Tracker',
+      elapsedSeconds: 0,
+      lastHeartbeat: new Date().toISOString(),
+      loginPlatform: loginMode === 'software' ? 'software' : 'webapp',
+      timezone: 'Asia/Manila',
+    }).catch(() => {});
   };
 
   const getTodayTrackedSeconds = useCallback((): number => {
     const today = getManilaDateString();
     const total = timeLogs
-      .filter((l) => l.userId === currentUser.id && l.date === today && l.status === 'completed')
+      .filter((l) => (l.userId === currentUser.id || l.employeeCode === currentUser.employeeCode) && l.date === today && l.status === 'completed')
       .reduce((acc, l) => acc + (Number(l.durationSeconds) || 0), 0);
     return total + (isTracking ? elapsedSeconds : 0);
-  }, [timeLogs, currentUser.id, isTracking, elapsedSeconds]);
+  }, [timeLogs, currentUser.id, currentUser.employeeCode, isTracking, elapsedSeconds]);
 
   const todayTotalSeconds = getTodayTrackedSeconds();
 
@@ -628,13 +893,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsDesktopDockView(mode === 'software');
     localStorage.setItem('trackpulse_auth', 'true');
     localStorage.setItem('trackpulse_current_user', JSON.stringify(user));
+    if (token) localStorage.setItem('trackpulse_token', token);
+
+    // Strict employee session isolation: Clear previous logs immediately
+    setTimeLogs([]);
+
+    // Fetch this employee's logs from server API
+    fetchTimeLogsFromGoogleSheets(undefined, undefined, { userId: user.employeeCode || user.id }).then((res) => {
+      if (res.success && Array.isArray(res.timeLogs)) {
+        const mapped = res.timeLogs.map((l) => ({ ...l, status: l.status || 'completed' })) as TimeLog[];
+        setTimeLogs(mapped);
+        localStorage.setItem('trackpulse_timelogs', JSON.stringify(mapped));
+      }
+    });
+
+    syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+      userId: user.id,
+      employeeCode: user.employeeCode,
+      userName: user.name,
+      role: user.role,
+      designation: user.designation || 'Agent',
+      department: user.department || 'Operations',
+      isOnline: true,
+      status: 'online',
+      isTracking: false,
+      isPaused: false,
+      currentTask: 'Ready to Track',
+      currentApp: 'LLC-Time-Tracker-V2 Desktop Tracker',
+      elapsedSeconds: 0,
+      lastHeartbeat: new Date().toISOString(),
+      loginPlatform: mode === 'software' ? 'software' : 'webapp',
+      timezone: 'Asia/Manila',
+    }).catch(() => {});
   };
 
   const logout = () => {
+    if (isTracking) {
+      stopTracking();
+    }
+
+    syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
+      userId: currentUser.id,
+      employeeCode: currentUser.employeeCode,
+      userName: currentUser.name,
+      role: currentUser.role,
+      designation: currentUser.designation,
+      isOnline: false,
+      status: 'offline',
+      isTracking: false,
+      isPaused: false,
+      currentTask: 'Shift Concluded',
+      currentApp: 'None',
+      elapsedSeconds: 0,
+      lastHeartbeat: new Date().toISOString(),
+      loginPlatform: loginMode === 'software' ? 'software' : 'webapp',
+    }).catch(() => {});
+
     setIsAuthenticated(false);
     setIsTracking(false);
+    setIsPaused(false);
+    setElapsedSeconds(0);
+    setTimeLogs([]);
     localStorage.removeItem('trackpulse_auth');
     localStorage.removeItem('trackpulse_current_user');
+    localStorage.removeItem('trackpulse_timelogs');
+    localStorage.removeItem('trackpulse_token');
   };
 
   const addAuditLog = useCallback(
@@ -758,7 +1081,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addTimeLog = (logData: Omit<TimeLog, 'id'> & { id?: string }) => {
     const newLog: TimeLog = { id: logData.id || `log-${Date.now()}`, ...logData };
     setTimeLogs((prev) => {
-      const updated = [newLog, ...prev];
+      // Remove any running log for THIS specific employee when a completed log arrives to prevent double duration
+      const targetCode = String(logData.employeeCode || logData.userId || '').trim().toLowerCase();
+      const filtered = logData.status === 'completed'
+        ? prev.filter((l) => {
+            const lCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+            return !(targetCode && lCode === targetCode && (l.status === 'running' || l.id.startsWith('active-seg-') || l.id.startsWith('seg-running-')));
+          })
+        : prev.filter((l) => l.id !== newLog.id);
+      const updated = [newLog, ...filtered];
       localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
       return updated;
     });
@@ -848,7 +1179,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const elapsedSecondsRef = useRef(elapsedSeconds);
   elapsedSecondsRef.current = elapsedSeconds;
 
-  const sessionStartTimestampRef = useRef<number>(0);
+  const isTrackingRef = useRef(isTracking);
+  isTrackingRef.current = isTracking;
+
+  const isPausedRef = useRef(isPaused);
+  isPausedRef.current = isPaused;
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -858,6 +1193,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const currentTaskRef = useRef(currentTask);
   currentTaskRef.current = currentTask;
+
+  const currentActiveAppRef = useRef(currentActiveApp);
+  currentActiveAppRef.current = currentActiveApp;
+
+  // Dynamic Active-Window Detection: Tracks focused tracker vs background work software
+  useEffect(() => {
+    const getAppForTask = (task: string): string => {
+      switch (task) {
+        case 'Email Reachout':
+          return 'Google Workspace (Gmail / Outreach CRM)';
+        case 'Email Interaction':
+          return 'Customer Support Portal / Webmail';
+        case 'Data Entry & Market Research':
+          return 'Spreadsheet & Web Research Browser';
+        case 'Follow-up':
+          return 'CRM System & Communication Suite';
+        case 'Training':
+          return 'Training LMS / Learning Management';
+        case 'Team Meeting':
+          return 'Video Conference (Google Meet / Zoom)';
+        case 'Coaching':
+          return 'Coaching Evaluation & Performance Suite';
+        case 'QA Review':
+        case 'QA Email Audit':
+        case 'Other QA Reviews':
+        case 'QA Coaching':
+          return 'QA Audit Tool & Scorecard Portal';
+        case 'Content Writing':
+          return 'Document Editor & Research Workspace';
+        case 'HR & Recruitment':
+          return 'HRIS & Recruitment Portal';
+        case 'Payroll Task':
+          return 'Payroll Processing & Timesheet Audit';
+        case 'System Ops Review':
+          return 'Cloud Operations & Systems Dashboard';
+        default:
+          return `Work Application (${task || 'Active Task'})`;
+      }
+    };
+
+    const handleFocus = () => {
+      setCurrentActiveApp('LLC-Time-Tracker-V2 Desktop Tracker');
+    };
+
+    const handleBlur = () => {
+      setCurrentActiveApp(getAppForTask(currentTaskRef.current));
+    };
+
+    // If window is currently not focused, set appropriate task app
+    if (typeof document !== 'undefined' && !document.hasFocus()) {
+      setCurrentActiveApp(getAppForTask(currentTask));
+    }
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [currentTask]);
 
   // Live Presence Polling (every 10 seconds)
   useEffect(() => {
@@ -880,45 +1275,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [googleSheetsWebhookUrl, users]);
 
+  // Wall-clock timestamp-based desktop timer and unthrottled background heartbeat + 5-minute sync
   useEffect(() => {
-    let interval: any = null;
-    if (isTracking && !isPaused) {
-      if (!sessionStartTimestampRef.current) {
-        sessionStartTimestampRef.current = Date.now() - (elapsedSeconds * 1000);
-      }
-      const updateTimer = () => {
-        if (sessionStartTimestampRef.current) {
-          const diff = Math.floor((Date.now() - sessionStartTimestampRef.current) / 1000);
-          setElapsedSeconds(Math.max(0, diff));
-        }
-      };
-      updateTimer();
-      interval = setInterval(updateTimer, 500);
+    let worker: Worker | null = null;
+    let fallbackInterval: any = null;
 
-      const handleVisibilityChange = () => {
-        if (document.visibilityState === 'visible') {
-          updateTimer();
-        }
-      };
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      window.addEventListener('focus', updateTimer);
+    const performTick = () => {
+      if (!isTrackingRef.current || !taskStartTimeRef.current) return;
+      const now = Date.now();
+      const elapsed = computeElapsedSeconds();
+      setElapsedSeconds(elapsed);
+      elapsedSecondsRef.current = elapsed;
 
-      return () => {
-        clearInterval(interval);
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-        window.removeEventListener('focus', updateTimer);
-      };
-    } else {
-      sessionStartTimestampRef.current = 0;
-    }
-  }, [isTracking, isPaused]);
-
-  // Objective 1: 3-Minute Heartbeat (Live_Presence only)
-  useEffect(() => {
-    let interval: any = null;
-    if (isTracking && !isPaused) {
-      const sendHeartbeat = () => {
-        const heartbeatPayload = {
+      // 3-minute heartbeat (180,000 ms)
+      if (!isPausedRef.current && now - lastHeartbeatEpochMsRef.current >= 180000) {
+        lastHeartbeatEpochMsRef.current = now;
+        syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
           userId: currentUserRef.current.id,
           employeeCode: currentUserRef.current.employeeCode,
           userName: currentUserRef.current.name,
@@ -926,30 +1298,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           designation: currentDesignationRef.current,
           department: currentUserRef.current.department || 'Operations',
           isOnline: true,
+          status: 'online',
           isTracking: true,
           isPaused: false,
           currentTask: currentTaskRef.current,
-          elapsedSeconds: elapsedSecondsRef.current,
+          currentApp: currentActiveAppRef.current,
+          elapsedSeconds: elapsed,
           lastHeartbeat: new Date().toISOString(),
-          loginPlatform: 'software' as const,
-        };
-        syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, heartbeatPayload).catch(() => {});
-      };
-      sendHeartbeat();
-      interval = setInterval(sendHeartbeat, 180000); // 3 minutes
-    }
-    return () => clearInterval(interval);
-  }, [isTracking, isPaused, googleSheetsWebhookUrl]);
+          loginPlatform: 'software',
+          timezone: 'Asia/Manila',
+        }).catch(() => {});
+      }
 
-  // Objective 2: 5-Minute Task Duration Synchronization
-  useEffect(() => {
-    let interval: any = null;
-    if (isTracking && !isPaused) {
-      const syncTaskDuration = () => {
-        const activeSegmentId = `active-seg-${currentUserRef.current.id}-${getManilaDateString()}`;
-        const now = new Date();
-        const duration = Math.max(1, elapsedSecondsRef.current);
-        const startTimeIso = new Date(now.getTime() - duration * 1000).toISOString();
+      // 5-minute task duration synchronization (300,000 ms)
+      if (!isPausedRef.current && now - last5mSyncEpochMsRef.current >= 300000) {
+        last5mSyncEpochMsRef.current = now;
+        const activeSegmentId = `active-seg-${currentUserRef.current.employeeCode || currentUserRef.current.id}`;
+        const startTimeIso = new Date(taskStartTimeRef.current).toISOString();
         const activeLog: TimeLog = {
           id: activeSegmentId,
           userId: currentUserRef.current.id,
@@ -958,20 +1323,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           userAvatar: currentUserRef.current.avatar || '',
           designation: currentDesignationRef.current,
           task: currentTaskRef.current,
-          date: getManilaDateString(now),
+          date: getManilaDateString(new Date(now)),
           startTime: startTimeIso,
           endTime: 'In Progress (5m Sync)',
-          durationSeconds: duration,
+          durationSeconds: Math.max(1, elapsed),
           status: 'running',
           geoTimezone: 'Asia/Manila',
-          geoLocalStartTime: getManilaTimeString(new Date(now.getTime() - duration * 1000)),
-          geoLocalEndTime: getManilaTimeString(now),
+          geoLocalStartTime: getManilaTimeString(new Date(taskStartTimeRef.current)),
+          geoLocalEndTime: getManilaTimeString(new Date(now)),
           mouseActivityAvg: 95,
           keyboardActivityAvg: 90,
           idleSeconds: 0,
           notes: 'Active task segment 5-minute sync',
           appsUsed: [],
         };
+
+        setTimeLogs((prev) => {
+          const filtered = prev.filter((l) => l.id !== activeSegmentId);
+          return [activeLog, ...filtered];
+        });
+
         fetch('/api/timelogs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -979,11 +1350,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }).catch((err) => {
           console.warn('5-minute task duration sync notice:', err);
         });
+      }
+    };
+
+    if (isTracking) {
+      performTick();
+
+      // Launch unthrottled Web Worker ticker for background / minimized state
+      try {
+        const workerBlob = new Blob(
+          ['setInterval(function() { postMessage("tick"); }, 1000);'],
+          { type: 'application/javascript' }
+        );
+        const workerUrl = URL.createObjectURL(workerBlob);
+        worker = new Worker(workerUrl);
+        worker.onmessage = () => {
+          performTick();
+        };
+      } catch (err) {
+        console.warn('Web Worker ticker initialization fallback:', err);
+      }
+
+      // Main-thread fallback interval
+      fallbackInterval = setInterval(performTick, 500);
+
+      // Visibility and focus listeners (instant catch-up upon restore / un-minimizing)
+      const handleVisibilityChange = () => {
+        performTick();
       };
-      interval = setInterval(syncTaskDuration, 300000); // 5 minutes
+      const handleFocus = () => {
+        performTick();
+      };
+      const handlePageShow = () => {
+        performTick();
+      };
+
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('focus', handleFocus);
+      window.addEventListener('blur', handleVisibilityChange);
+      window.addEventListener('pageshow', handlePageShow);
+
+      return () => {
+        if (worker) {
+          worker.terminate();
+        }
+        if (fallbackInterval) {
+          clearInterval(fallbackInterval);
+        }
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('focus', handleFocus);
+        window.removeEventListener('blur', handleVisibilityChange);
+        window.removeEventListener('pageshow', handlePageShow);
+      };
     }
-    return () => clearInterval(interval);
-  }, [isTracking, isPaused]);
+  }, [isTracking, isPaused, googleSheetsWebhookUrl, computeElapsedSeconds]);
 
   return (
     <AppContext.Provider

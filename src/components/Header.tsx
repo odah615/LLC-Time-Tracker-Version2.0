@@ -234,6 +234,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
         </nav>
 
         <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setIsDesktopDockView(true)}
+            className="p-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition-colors flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-sm"
+            title="Switch to Desktop Software Tracker"
+          >
+            <Laptop className="w-4 h-4 text-emerald-400" />
+            <span className="hidden sm:inline">Desktop Tracker</span>
+          </button>
+
           {(currentUser.role === 'admin' || isSuperAdmin || hasPermission('canManageTasks')) && (
             <button
               onClick={() => setShowTaskManagerModal(true)}
