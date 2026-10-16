@@ -66,25 +66,14 @@ export const resolveCanonicalEmployee = (input?: {
 
   for (const [code, info] of Object.entries(CANONICAL_EMPLOYEE_DIRECTORY)) {
     const infoNum = code.replace(/^[A-Z\-_]+/, '');
-    const codeMatch = (rawCode && rawCode === code) || (numCode && infoNum && numCode === infoNum);
-    const userMatch = rawUser && rawUser === info.username.toLowerCase();
-    const nameMatch = rawNameLower && (rawNameLower === info.name.toLowerCase() || rawNameLower.includes(info.name.toLowerCase()) || info.name.toLowerCase().includes(rawNameLower));
-    const emailMatch = rawEmail && rawEmail === info.email.toLowerCase();
-    const idMatch = rawId && (rawId.includes(code.toLowerCase()) || rawId.includes(info.username.toLowerCase()));
+    const codeMatch = Boolean(rawCode && rawCode === code);
+    const userMatch = Boolean(rawUser && rawUser === info.username.toLowerCase());
+    const nameMatch = Boolean(rawNameLower && rawNameLower === info.name.toLowerCase());
+    const emailMatch = Boolean(rawEmail && rawEmail === info.email.toLowerCase());
+    const idMatch = Boolean(rawId && (rawId === code.toLowerCase() || rawId === info.username.toLowerCase()));
 
     if (codeMatch || userMatch || nameMatch || emailMatch || idMatch) {
       return { code, ...info };
-    }
-  }
-
-  const rawTokens = [rawUser, rawCode.toLowerCase(), rawNameLower].filter(Boolean);
-  for (const [code, info] of Object.entries(CANONICAL_EMPLOYEE_DIRECTORY)) {
-    const nameLower = info.name.toLowerCase();
-    const nameParts = nameLower.split(/\s+/);
-    for (const tok of rawTokens) {
-      if (tok.length >= 4 && (nameLower.includes(tok) || nameParts.some((p) => p === tok || p.startsWith(tok) || tok.startsWith(p)))) {
-        return { code, ...info };
-      }
     }
   }
 
@@ -305,13 +294,11 @@ export const deduplicateUsers = (rawUsers: User[]): User[] => {
     let existingIndex = -1;
     if (normCode && codeMap.has(normCode)) {
       existingIndex = codeMap.get(normCode)!;
-    } else if (numOnlyCode && numCodeMap.has(numOnlyCode)) {
-      existingIndex = numCodeMap.get(numOnlyCode)!;
     } else if (normUsername && userMap.has(normUsername)) {
       existingIndex = userMap.get(normUsername)!;
     } else if (normEmail && emailMap.has(normEmail)) {
       existingIndex = emailMap.get(normEmail)!;
-    } else if (normName && nameMap.has(normName)) {
+    } else if (normName && normName.length >= 3 && nameMap.has(normName)) {
       existingIndex = nameMap.get(normName)!;
     } else if (rawId && idMap.has(rawId)) {
       existingIndex = idMap.get(rawId)!;
