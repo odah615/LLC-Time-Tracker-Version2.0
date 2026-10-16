@@ -110,7 +110,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       if (isMounted && !isRefreshing) {
         performRefresh();
       }
-    }, 60000);
+    }, 120000);
     return () => {
       isMounted = false;
       clearInterval(interval);

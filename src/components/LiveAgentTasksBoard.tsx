@@ -232,7 +232,7 @@ export const LiveAgentTasksBoard: React.FC<LiveAgentTasksBoardProps> = ({
       let taskElapsedSeconds = 0;
       if (presenceMode === 'tracking' || presenceMode === 'idle') {
         taskElapsedSeconds = presence?.elapsedSeconds || 0;
-        if (presence?.isTracking && !presence?.isPaused && diffMs > 0 && diffMs < 60000) {
+        if (presence?.isTracking && !presence?.isPaused && diffMs > 0 && diffMs < 180000) {
           taskElapsedSeconds += Math.floor(diffMs / 1000);
         }
       }

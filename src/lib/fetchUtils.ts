@@ -10,7 +10,7 @@ export interface BackoffState {
   maxDelayMs: number;
 }
 
-export function createBackoffState(minDelayMs = 30000, maxDelayMs = 300000): BackoffState {
+export function createBackoffState(minDelayMs = 120000, maxDelayMs = 300000): BackoffState {
   return {
     currentDelayMs: minDelayMs,
     minDelayMs,

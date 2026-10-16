@@ -1450,7 +1450,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentTask]);
 
-  // Live Presence Polling (every 10 seconds)
+  // Live Presence Polling (every 2 minutes / 120,000 ms)
   useEffect(() => {
     let isMounted = true;
     const pollPresence = async () => {
@@ -1464,7 +1464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
     pollPresence();
-    const interval = setInterval(pollPresence, 10000);
+    const interval = setInterval(pollPresence, 120000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -1483,8 +1483,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setElapsedSeconds(elapsed);
       elapsedSecondsRef.current = elapsed;
 
-      // 3-minute heartbeat (180,000 ms)
-      if (!isPausedRef.current && now - lastHeartbeatEpochMsRef.current >= 180000) {
+      // 2-minute presence heartbeat (120,000 ms)
+      if (!isPausedRef.current && now - lastHeartbeatEpochMsRef.current >= 120000) {
         lastHeartbeatEpochMsRef.current = now;
         syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
           userId: currentUserRef.current.id,
