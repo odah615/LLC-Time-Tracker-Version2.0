@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { User, UserRole, Designation } from '../../types';
+import { User, UserRole, Designation, ALLOWED_DESIGNATIONS } from '../../types';
 import { Users, X, Check, Lock, KeyRound, Eye, EyeOff, RefreshCw, Calendar, BadgeCheck } from 'lucide-react';
 import { ConfirmationModal } from './ConfirmationModal';
-import { generateUniqueUsername } from '../../lib/userUtils';
+import { generateUniqueUsername, resolveSupervisor } from '../../lib/userUtils';
 
 interface EmployeeCrudModalProps {
   isOpen: boolean;
@@ -40,7 +40,7 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<UserRole>('agent');
-  const [designation, setDesignation] = useState<string>('Agent');
+  const [designation, setDesignation] = useState<string>('Outbound Agent');
   const [monthlyRate, setMonthlyRate] = useState<number>(0);
   const [geoCity, setGeoCity] = useState('Manila, Philippines');
   const [geoTimezone, setGeoTimezone] = useState('Asia/Manila');
@@ -51,6 +51,20 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
   const [avatar, setAvatar] = useState(
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
   );
+
+  const getSelectedSupervisorValue = (tlId?: string) => {
+    if (!tlId) return '';
+    const resolved = resolveSupervisor(tlId, users);
+    if (resolved) {
+      return resolved.username || resolved.id;
+    }
+    return tlId;
+  };
+
+  const allowedDesignationOptions = [...ALLOWED_DESIGNATIONS];
+  if (designation && !allowedDesignationOptions.includes(designation as any)) {
+    allowedDesignationOptions.unshift(designation as any);
+  }
 
   const eligibleSupervisors = users.filter((u) => {
     if (u.isSecretBackup) return false;
@@ -81,13 +95,13 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
       setEmail(editingUser.email);
       setPassword(editingUser.password || 'Password123!');
       setRole(editingUser.role);
-      setDesignation(editingUser.designation);
+      setDesignation(editingUser.designation || 'Outbound Agent');
       setMonthlyRate(editingUser.monthlyRate !== undefined ? editingUser.monthlyRate : 0);
       setGeoCity(editingUser.geoCity || 'Manila, Philippines');
       setGeoTimezone(editingUser.geoTimezone || 'Asia/Manila');
       setEmployeeCode(editingUser.employeeCode);
       setJoinDate(editingUser.joinDate || '2020-01-01');
-      setTeamLeaderId(editingUser.teamLeaderId || '');
+      setTeamLeaderId(getSelectedSupervisorValue(editingUser.teamLeaderId));
       setStatus(editingUser.status || 'active');
       setAvatar(editingUser.avatar);
     } else {
@@ -96,7 +110,7 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
       setEmail('');
       setPassword('Password123!');
       setRole('agent');
-      setDesignation('Agent');
+      setDesignation('Outbound Agent');
       setMonthlyRate(0);
       setGeoCity('Manila, Philippines');
       setGeoTimezone('Asia/Manila');
@@ -391,7 +405,7 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
                     : 'bg-slate-50 border-slate-200 text-slate-800 focus:ring-2 focus:ring-blue-500'
                 }`}
               >
-                {designationList.map((d) => (
+                {allowedDesignationOptions.map((d) => (
                   <option key={d} value={d}>
                     {d}
                   </option>
@@ -404,7 +418,7 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
             <div>
               <label className="block text-slate-700 font-semibold mb-1">Assigned Team Leader / Supervisor</label>
               <select
-                value={isEditingSuperAdmin ? '' : teamLeaderId}
+                value={isEditingSuperAdmin ? '' : getSelectedSupervisorValue(teamLeaderId)}
                 disabled={isEditingSuperAdmin}
                 onChange={(e) => setTeamLeaderId(e.target.value)}
                 className={`w-full border rounded-xl p-2.5 font-medium transition-all ${
@@ -416,7 +430,7 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
                 <option value="">{isEditingSuperAdmin ? 'Executive Board (No Supervisor)' : 'None / Direct Executive'}</option>
                 {!isEditingSuperAdmin &&
                   eligibleSupervisors.map((tl) => (
-                    <option key={tl.id} value={tl.id}>
+                    <option key={tl.id} value={tl.username || tl.id}>
                       {tl.name} ({tl.designation || (tl.role === 'admin' ? 'Admin' : tl.role === 'team_lead' ? 'Team Leader' : 'Trainer')})
                     </option>
                   ))}

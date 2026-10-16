@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { PasswordResetModal } from '../modals/PasswordResetModal';
 import { ConfirmationModal } from '../modals/ConfirmationModal';
 import { downloadDesktopSoftwarePackage, DesktopOS } from '../../lib/desktopDownloader';
+import { resolveSupervisor } from '../../lib/userUtils';
 import {
   Users,
   Shield,
@@ -95,6 +96,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     return `${day}/${month}/${year}`;
   };
 
+  const getSelectedSupervisorValue = (tlId?: string) => {
+    if (!tlId) return '';
+    const resolved = resolveSupervisor(tlId, users);
+    if (resolved) {
+      return resolved.username || resolved.id;
+    }
+    return tlId;
+  };
+
   const handleRoleChangePrompt = (usr: User, newRole: string) => {
     if (usr.role === newRole) return;
     const roleMap: Record<string, string> = {
@@ -118,15 +128,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       variant: 'warning',
       action: () => {
         let newDesig = usr.designation;
-        if (newRole === 'agent') newDesig = 'Agent' as any;
+        if (newRole === 'agent') newDesig = 'Outbound Agent' as any;
         else if (newRole === 'team_lead') newDesig = 'Team Leader' as any;
         else if (newRole === 'trainer') newDesig = 'Trainer' as any;
-        else if (newRole === 'qa') newDesig = 'QA Specialist' as any;
-        else if (newRole === 'writer') newDesig = 'Writer' as any;
-        else if (newRole === 'hr') newDesig = 'HR' as any;
-        else if (newRole === 'payroll') newDesig = 'Payroll Officer' as any;
-        else if (newRole === 'va_admin') newDesig = 'Admin' as any;
-        else if (newRole === 'admin') newDesig = 'Admin' as any;
+        else if (newRole === 'va_admin' || newRole === 'admin') newDesig = 'Admin' as any;
         updateUser(usr.id, { role: newRole as any, designation: newDesig });
         addAuditLog({
           actorId: currentUser.id,
@@ -144,11 +149,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   };
 
   const handleReassignSupervisorPrompt = (usr: User, newLeaderId: string) => {
-    if ((usr.teamLeaderId || '') === newLeaderId) return;
-    const oldLeader = users.find((u) => u.id === usr.teamLeaderId);
-    const newLeader = users.find((u) => u.id === newLeaderId);
-    const fromVal = oldLeader ? `${oldLeader.name} (${oldLeader.designation})` : 'None / Direct';
-    const toVal = newLeader ? `${newLeader.name} (${newLeader.designation})` : 'None / Direct';
+    const currentVal = getSelectedSupervisorValue(usr.teamLeaderId);
+    if (currentVal === newLeaderId) return;
+    const oldLeader = resolveSupervisor(usr.teamLeaderId, users);
+    const newLeader = resolveSupervisor(newLeaderId, users);
+    const fromVal = oldLeader ? `${oldLeader.name} (${oldLeader.designation || oldLeader.role})` : 'None / Direct';
+    const toVal = newLeader ? `${newLeader.name} (${newLeader.designation || newLeader.role})` : 'None / Direct';
     setConfirmModal({
       isOpen: true,
       title: 'Confirm Supervisor Reassignment',
@@ -160,7 +166,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       confirmText: 'Yes, Reassign Supervisor',
       variant: 'info',
       action: () => {
-        updateUser(usr.id, { teamLeaderId: newLeaderId || undefined });
+        const canonicalTL = newLeader ? (newLeader.username || newLeader.id) : undefined;
+        updateUser(usr.id, { teamLeaderId: canonicalTL });
         addAuditLog({
           actorId: currentUser.id,
           actorName: currentUser.name,
@@ -693,14 +700,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         </div>
                       ) : (
                         <select
-                          value={usr.teamLeaderId || ''}
+                          value={getSelectedSupervisorValue(usr.teamLeaderId)}
                           onChange={(e) => handleReassignSupervisorPrompt(usr, e.target.value)}
                           className="bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-2 py-1 font-semibold text-xs focus:ring-2 focus:ring-blue-500 w-full max-w-[170px]"
                         >
                           <option value="">None / Direct</option>
                           {teamLeadsAndTrainers.map((tl) => (
-                            <option key={tl.id} value={tl.id}>
-                              {tl.name} ({tl.designation})
+                            <option key={tl.id} value={tl.username || tl.id}>
+                              {tl.name} ({tl.designation || (tl.role === 'admin' ? 'Admin' : tl.role === 'team_lead' ? 'Team Leader' : 'Trainer')})
                             </option>
                           ))}
                         </select>

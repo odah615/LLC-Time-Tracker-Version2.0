@@ -36,6 +36,7 @@ import { User, PasswordResetRequest } from '../../types';
 import { UserAvatar } from '../UserAvatar';
 import { PasswordResetModal } from '../modals/PasswordResetModal';
 import { maskPassword } from '../../lib/googleSheetsSync';
+import { resolveSupervisor } from '../../lib/userUtils';
 
 interface EmployeeDetailsViewProps {
   onOpenAddUserModal: () => void;
@@ -176,11 +177,9 @@ export const EmployeeDetailsView: React.FC<EmployeeDetailsViewProps> = ({
   };
 
   const getTeamLeaderName = (leaderId?: string) => {
-    if (!leaderId) return 'Admin';
-    if (leaderId === 'usr-superadmin-red' || leaderId.toLowerCase() === 'superadmin') return 'Admin';
-    if (leaderId === 'usr-llc-0003' || leaderId.toUpperCase() === 'LLC-0003') return 'trainer';
-    const leader = users.find((u) => u.id === leaderId || u.employeeCode === leaderId || u.username === leaderId);
-    return leader ? (leader.username || leader.name) : leaderId;
+    if (!leaderId) return 'None / Direct';
+    const leader = resolveSupervisor(leaderId, users);
+    return leader ? leader.name || leader.username : leaderId;
   };
 
   return (

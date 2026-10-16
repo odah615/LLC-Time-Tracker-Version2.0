@@ -1,9 +1,18 @@
 import { User } from '../types';
 
+export const capitalizeWords = (str: string): string => {
+  if (!str) return '';
+  return str
+    .trim()
+    .split(/\s+/)
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ''))
+    .join(' ');
+};
+
 export const CANONICAL_EMPLOYEE_DIRECTORY: Record<string, { name: string; username: string; email: string; role: 'admin' | 'trainer' | 'agent' | 'team_lead'; designation: string }> = {
   'SUPERADMIN': { name: 'Admin', username: 'admin', email: 'admin@llc.com', role: 'admin', designation: 'Admin' },
   'LLC-0003': { name: 'Pia', username: 'trainer', email: 'piaodahcam@gmail.com', role: 'trainer', designation: 'Trainer' },
-  'LLC-0023': { name: 'Juan David', username: 'jdavid', email: 'jdavid@gmail.com', role: 'agent', designation: 'Agent' },
+  'LLC-0023': { name: 'Juan David', username: 'jdavid', email: 'jdavid@gmail.com', role: 'agent', designation: 'Outbound Agent' },
 };
 
 /**
@@ -20,7 +29,7 @@ export const resolveCanonicalEmployee = (input?: {
   if (!input) return null;
   let rawCode = '';
   let rawUser = '';
-  let rawName = '';
+  let rawNameOriginal = '';
   let rawEmail = '';
   let rawId = '';
 
@@ -32,17 +41,18 @@ export const resolveCanonicalEmployee = (input?: {
       rawEmail = s.toLowerCase();
     } else {
       rawUser = s.toLowerCase();
-      rawName = s;
+      rawNameOriginal = s;
       rawId = s.toLowerCase();
     }
   } else {
     rawCode = (input.employeeCode || '').toUpperCase().trim();
     rawUser = (input.username || '').toLowerCase().trim();
-    rawName = (input.name || '').toLowerCase().trim();
+    rawNameOriginal = (input.name || '').trim();
     rawEmail = (input.email || '').toLowerCase().trim();
     rawId = (input.id || '').toLowerCase().trim();
   }
 
+  const rawNameLower = rawNameOriginal.toLowerCase();
   const numCode = rawCode.replace(/^[A-Z\-_]+/, '');
 
   const ALIAS_MAP: Record<string, string> = {
@@ -58,7 +68,7 @@ export const resolveCanonicalEmployee = (input?: {
     const infoNum = code.replace(/^[A-Z\-_]+/, '');
     const codeMatch = (rawCode && rawCode === code) || (numCode && infoNum && numCode === infoNum);
     const userMatch = rawUser && rawUser === info.username.toLowerCase();
-    const nameMatch = rawName && (rawName === info.name.toLowerCase() || rawName.includes(info.name.toLowerCase()) || info.name.toLowerCase().includes(rawName));
+    const nameMatch = rawNameLower && (rawNameLower === info.name.toLowerCase() || rawNameLower.includes(info.name.toLowerCase()) || info.name.toLowerCase().includes(rawNameLower));
     const emailMatch = rawEmail && rawEmail === info.email.toLowerCase();
     const idMatch = rawId && (rawId.includes(code.toLowerCase()) || rawId.includes(info.username.toLowerCase()));
 
@@ -67,7 +77,7 @@ export const resolveCanonicalEmployee = (input?: {
     }
   }
 
-  const rawTokens = [rawUser, rawCode.toLowerCase(), rawName].filter(Boolean);
+  const rawTokens = [rawUser, rawCode.toLowerCase(), rawNameLower].filter(Boolean);
   for (const [code, info] of Object.entries(CANONICAL_EMPLOYEE_DIRECTORY)) {
     const nameLower = info.name.toLowerCase();
     const nameParts = nameLower.split(/\s+/);
@@ -80,7 +90,7 @@ export const resolveCanonicalEmployee = (input?: {
 
   if (numCode && /^LLC[-_]?\d+/i.test(rawCode)) {
     const cleanCode = `LLC-${numCode.padStart(4, '0')}`;
-    const cleanName = rawName || rawUser || cleanCode;
+    const cleanName = capitalizeWords(rawNameOriginal || rawUser || cleanCode);
     const cleanUser = rawUser || cleanName.toLowerCase().replace(/[^a-z0-9]/g, '');
     return {
       code: cleanCode,
@@ -88,7 +98,20 @@ export const resolveCanonicalEmployee = (input?: {
       username: cleanUser,
       email: rawEmail || `${cleanUser}@llctimetracker.com`,
       role: 'agent',
-      designation: 'Agent',
+      designation: 'Outbound Agent',
+    };
+  }
+
+  if (rawNameOriginal) {
+    const cleanName = capitalizeWords(rawNameOriginal);
+    const cleanUser = rawUser || cleanName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return {
+      code: rawCode || 'LLC-0000',
+      name: cleanName,
+      username: cleanUser,
+      email: rawEmail || `${cleanUser}@llctimetracker.com`,
+      role: 'agent',
+      designation: 'Outbound Agent',
     };
   }
 
@@ -257,17 +280,18 @@ export const deduplicateUsers = (rawUsers: User[]): User[] => {
       continue;
     }
 
+    const originalInputName = u.name ? capitalizeWords(u.name) : '';
     const canonical = resolveCanonicalEmployee(u);
-    let effectiveUser: User = { ...u };
+    let effectiveUser: User = { ...u, name: originalInputName || u.name };
     if (canonical) {
       effectiveUser = {
         ...effectiveUser,
-        name: canonical.name,
-        username: canonical.username,
-        employeeCode: canonical.code,
+        name: originalInputName || canonical.name || effectiveUser.name,
+        username: canonical.username || effectiveUser.username,
+        employeeCode: canonical.code || effectiveUser.employeeCode,
         email: canonical.email || effectiveUser.email,
         role: canonical.role || effectiveUser.role,
-        designation: canonical.designation || effectiveUser.designation || 'Agent',
+        designation: canonical.designation || effectiveUser.designation || 'Outbound Agent',
       };
     }
 
@@ -296,7 +320,10 @@ export const deduplicateUsers = (rawUsers: User[]): User[] => {
     if (existingIndex >= 0) {
       const existing = result[existingIndex];
       const existingCanon = resolveCanonicalEmployee(existing);
-      const chosenName = canonical?.name || existingCanon?.name || (effectiveUser.name && effectiveUser.name !== effectiveUser.username ? effectiveUser.name : existing.name);
+      const rawChosenName = (effectiveUser.name && effectiveUser.name !== effectiveUser.username)
+        ? effectiveUser.name
+        : (existing.name && existing.name !== existing.username ? existing.name : canonical?.name || existingCanon?.name || '');
+      const chosenName = capitalizeWords(rawChosenName);
       const chosenUsername = canonical?.username || existingCanon?.username || effectiveUser.username || existing.username;
       const chosenCode = canonical?.code || existingCanon?.code || effectiveUser.employeeCode || existing.employeeCode;
 
