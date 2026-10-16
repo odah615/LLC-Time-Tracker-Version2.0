@@ -1442,8 +1442,50 @@ function handlePost_(e) {
         employees: readEmployees(ss, false),
         timeLogs: readTimeLogs(ss, data),
         presence: readPresence(ss),
-        attendance: readAttendance(ss)
+        attendance: readAttendance(ss),
+        designationTasks: readDesignationTasks(ss)
       });
+    }
+
+    if (action === "GET_DESIGNATION_TASKS") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        designationTasks: readDesignationTasks(ss)
+      });
+    }
+
+    if (action === "SYNC_DESIGNATION_TASKS") {
+      var dTasksObj = data.designationTasks || data.tasks || {};
+      var dtSheet = ss.getSheetByName("Designation_Tasks") || ss.getSheetByName("designation_dtask") || ss.insertSheet("Designation_Tasks");
+      if (dtSheet.getLastRow() === 0) {
+        dtSheet.appendRow(["Designation Name", "Allowed Tracking Tasks (Comma Separated)", "Total Tasks Count", "Last Updated (ISO)"]);
+        formatHeaderRow(dtSheet, 4);
+      }
+      var existingRowMap = {};
+      if (dtSheet.getLastRow() > 1) {
+        var dtVals = dtSheet.getRange(2, 1, dtSheet.getLastRow() - 1, 1).getValues();
+        for (var dI = 0; dI < dtVals.length; dI++) {
+          var dName = String(dtVals[dI][0] || "").trim();
+          if (dName) existingRowMap[dName.toLowerCase()] = dI + 2;
+        }
+      }
+      var nowIso = new Date().toISOString();
+      var keys = Object.keys(dTasksObj);
+      for (var k = 0; k < keys.length; k++) {
+        var desigKey = keys[k];
+        var tasksArr = Array.isArray(dTasksObj[desigKey]) ? dTasksObj[desigKey] : [];
+        var commaTasks = tasksArr.join(", ");
+        var rowIdx = existingRowMap[desigKey.toLowerCase()];
+        var rowData = [desigKey, commaTasks, tasksArr.length, nowIso];
+        if (rowIdx) {
+          dtSheet.getRange(rowIdx, 1, 1, 4).setValues([rowData]);
+        } else {
+          dtSheet.appendRow(rowData);
+          existingRowMap[desigKey.toLowerCase()] = dtSheet.getLastRow();
+        }
+      }
+      return jsonResponse({ status: "SUCCESS", action: action, count: keys.length });
     }
 
     if (action === "GET_AUTH_EMPLOYEES") {
@@ -1766,6 +1808,23 @@ function readMonthlySummaries(ss, opts) {
       avgActivity: String(r[9] || "0%")
     });
   }
+}
+
+function readDesignationTasks(ss) {
+  var dtSheet = ss.getSheetByName("Designation_Tasks") || ss.getSheetByName("designation_dtask") || ss.getSheetByName("Designation_Task");
+  if (!dtSheet || dtSheet.getLastRow() <= 1) return null;
+
+  var values = dtSheet.getRange(2, 1, dtSheet.getLastRow() - 1, 4).getValues();
+  var out = {};
+  for (var i = 0; i < values.length; i++) {
+    var desig = String(values[i][0] || "").trim();
+    if (!desig) continue;
+    var rawTasks = String(values[i][1] || "").trim();
+    var taskArray = rawTasks
+      ? rawTasks.split(",").map(function(t) { return t.trim(); }).filter(Boolean)
+      : [];
+    out[desig] = taskArray;
+  }
   return out;
 }
 
@@ -1820,6 +1879,7 @@ function createAllTabsNow() {
     { name: "Employee_Directory", headers: ["Employee Code", "Username", "Full Name", "Email", "Role", "Designation", "Date Hired", "Monthly Rate", "Hourly Rate", "Team Leader", "Screenshot Monitored", "Activity Monitored", "Account Status", "Masked Password", "AccountPassword", "mustChangePassword"] },
     { name: "Daily_Attendance", headers: ["Log ID", "Date", "User ID", "Employee Code", "Employee Name", "Role", "First Check-in", "Last Check-out", "Total Duration", "Shift Status"] },
     { name: "Audit_Logs", headers: ["Log ID", "Timestamp (ISO)", "Category", "Actor ID", "Actor Name", "Actor Role", "Action Details", "IP / Device"] },
+    { name: "Designation_Tasks", headers: ["Designation Name", "Allowed Tracking Tasks (Comma Separated)", "Total Tasks Count", "Last Updated (ISO)"] },
   ];
 
   tabs.forEach(function(t) {
@@ -1829,6 +1889,23 @@ function createAllTabsNow() {
       formatHeaderRow(sheet, t.headers.length);
     }
   });
+
+  var dtSheet = ss.getSheetByName("Designation_Tasks");
+  if (dtSheet && dtSheet.getLastRow() === 1) {
+    var nowIso = new Date().toISOString();
+    var defaultDtRows = [
+      ["Outbound Agent", "Data Entry & Market Research, Email Reachout, Follow-up, Training, Team Meeting, Coaching", 6, nowIso],
+      ["Team Leader", "Team Supervision, Team Meeting, Training, Coaching, QA Review, On Shift", 6, nowIso],
+      ["Trainer", "Training, Coaching, Team Meeting, QA Review, On Shift", 5, nowIso],
+      ["Admin", "System Ops Review, On Shift", 2, nowIso],
+      ["QA Specialist", "QA Email Audit, Other QA Reviews, QA Coaching", 3, nowIso],
+      ["Writer", "Content Writing, Team Meeting, On Shift", 3, nowIso],
+      ["HR", "Team Meeting, HR & Recruitment, On Shift", 3, nowIso],
+      ["Payroll Officer", "Payroll task, On Shift, Team Meeting", 3, nowIso],
+      ["Inbound Agent", "Data Entry & Market Research, Email Interaction, Training, Team Meeting, Coaching", 5, nowIso]
+    ];
+    defaultDtRows.forEach(function(r) { dtSheet.appendRow(r); });
+  }
 
   var empSheet = ss.getSheetByName("Employee_Directory");
   if (empSheet && empSheet.getLastRow() === 1) {

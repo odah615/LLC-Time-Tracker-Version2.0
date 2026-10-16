@@ -56,34 +56,8 @@ export function sanitizeUser(user: any): any {
 
 const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
   'Outbound Agent': [
-    'Email Reachout',
-    'Data Entry and Market Research',
     'Data Entry & Market Research',
-    'Follow-up',
-    'Training',
-    'Team Meeting',
-    'Coaching',
-  ],
-  'Inbound Agent': [
     'Email Reachout',
-    'Email',
-  ],
-  'Outbound Agent/Team': [
-    'Email Reachout',
-    'Data Entry and Market Research',
-    'Data Entry & Market Research',
-    'Follow-up',
-    'Training',
-    'Team Meeting',
-    'Coaching',
-  ],
-  'Inbound Agent/Team': [
-    'Email Reachout',
-    'Email',
-  ],
-  'Agent': [
-    'Email Reachout',
-    'Data Entry and Market Research',
     'Follow-up',
     'Training',
     'Team Meeting',
@@ -108,10 +82,6 @@ const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
     'System Ops Review',
     'On Shift',
   ],
-  'Super Admin': [
-    'System Ops Review',
-    'On Shift',
-  ],
   'QA Specialist': [
     'QA Email Audit',
     'Other QA Reviews',
@@ -125,13 +95,46 @@ const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
   'HR': [
     'Team Meeting',
     'HR & Recruitment',
-    'Payroll Task',
     'On Shift',
   ],
   'Payroll Officer': [
-    'Payroll Task',
+    'Payroll task',
     'On Shift',
     'Team Meeting',
+  ],
+  'Inbound Agent': [
+    'Data Entry & Market Research',
+    'Email Interaction',
+    'Training',
+    'Team Meeting',
+    'Coaching',
+  ],
+  'Super Admin': [
+    'System Ops Review',
+    'On Shift',
+  ],
+  'Outbound Agent/Team': [
+    'Data Entry & Market Research',
+    'Email Reachout',
+    'Follow-up',
+    'Training',
+    'Team Meeting',
+    'Coaching',
+  ],
+  'Inbound Agent/Team': [
+    'Data Entry & Market Research',
+    'Email Interaction',
+    'Training',
+    'Team Meeting',
+    'Coaching',
+  ],
+  'Agent': [
+    'Data Entry & Market Research',
+    'Email Reachout',
+    'Follow-up',
+    'Training',
+    'Team Meeting',
+    'Coaching',
   ],
 };
 

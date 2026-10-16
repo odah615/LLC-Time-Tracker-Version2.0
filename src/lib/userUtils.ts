@@ -571,9 +571,11 @@ export const normalizeDesignation = (raw?: string | null): string => {
   if (/^inbound/i.test(clean)) return 'Inbound Agent';
   if (/^team\s*lead/i.test(clean)) return 'Team Leader';
   if (/^trainer/i.test(clean)) return 'Trainer';
-  if (/^admin/i.test(clean)) return 'Admin';
-  if (/^super\s*admin/i.test(clean)) return 'Admin';
-  // Preserve legacy "Agent" as is, so it can be flagged for manual assignment
+  if (/^super\s*admin/i.test(clean) || /^admin/i.test(clean)) return 'Admin';
+  if (/^qa/i.test(clean)) return 'QA Specialist';
+  if (/^writer/i.test(clean)) return 'Writer';
+  if (/^hr/i.test(clean)) return 'HR';
+  if (/^payroll/i.test(clean)) return 'Payroll Officer';
   return clean;
 };
 
