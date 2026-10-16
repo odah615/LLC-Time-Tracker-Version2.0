@@ -625,12 +625,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const prevSegmentId = activeSegmentIdRef.current;
       const completedTaskCategory = currentTask;
 
+      let completedLog: TimeLog | null = null;
+
       // 1. Finalize the existing task segment with its ORIGINAL task category and status 'completed'
       if (isTracking && duration > 0) {
-        addTimeLog({
+        completedLog = {
           id: prevSegmentId,
           userId: currentUser.id,
-          employeeCode: currentUser.employeeCode,
+          employeeCode: currentUser.employeeCode || currentUser.id,
           userName: currentUser.name,
           userAvatar: currentUser.avatar,
           designation: currentDesignation,
@@ -648,13 +650,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           date: todayStr,
           notes: `Completed task segment for ${completedTaskCategory}`,
           appsUsed: [],
-        });
+        };
+        addTimeLog(completedLog);
       }
 
       // 2. Start a brand NEW task segment with a NEW stable segment ID
       const nextTask = taskSwitchPending.targetTask;
       const newStartMs = Date.now();
-      const newSegmentId = `seg-${currentUser.employeeCode || currentUser.id}-${newStartMs}`;
+      const empCode = (currentUser.employeeCode || currentUser.id || 'usr-001').trim();
+      const newSegmentId = `seg-${empCode}-${newStartMs}`;
 
       activeSegmentIdRef.current = newSegmentId;
       taskStartTimeRef.current = newStartMs;
@@ -669,10 +673,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsPaused(false);
       setTaskSwitchPending(null);
 
+      const newRunningLog: TimeLog = {
+        id: newSegmentId,
+        userId: currentUser.id,
+        employeeCode: empCode,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar || '',
+        designation: currentDesignation,
+        task: nextTask,
+        date: getManilaDateString(new Date(newStartMs)),
+        startTime: new Date(newStartMs).toISOString(),
+        endTime: 'In Progress (5m Sync)',
+        durationSeconds: 1,
+        status: 'running',
+        geoTimezone: 'Asia/Manila',
+        geoLocalStartTime: getManilaTimeString(new Date(newStartMs)),
+        geoLocalEndTime: getManilaTimeString(new Date(newStartMs)),
+        mouseActivityAvg: 95,
+        keyboardActivityAvg: 90,
+        idleSeconds: 0,
+        notes: `Active task segment for ${nextTask}`,
+        appsUsed: [],
+      };
+
+      addTimeLog(newRunningLog);
+
       try {
         const activeSessionData = {
           segmentId: newSegmentId,
-          employeeCode: currentUser.employeeCode || currentUser.id,
+          employeeCode: empCode,
           userId: currentUser.id,
           task: nextTask,
           designation: currentDesignation,
@@ -683,13 +712,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           lastHeartbeat: newStartMs,
           lastSync5m: newStartMs,
         };
-        localStorage.setItem(getActiveSessionStorageKey(currentUser.employeeCode || currentUser.id), JSON.stringify(activeSessionData));
+        localStorage.setItem(getActiveSessionStorageKey(empCode), JSON.stringify(activeSessionData));
       } catch {}
+
+      // Immediately transmit both completed and new running segments upstream to Google Sheets Webhook
+      if (googleSheetsWebhookUrl) {
+        const logsToSync = completedLog ? [completedLog, newRunningLog] : [newRunningLog];
+        syncDataToGoogleSheetsWebhook(
+          googleSheetsWebhookUrl,
+          logsToSync,
+          users,
+          auditLogs,
+          payrollRecords,
+          dailyAttendanceLogs,
+          idleLogs,
+          leaveRequests,
+          designationTasks,
+          rolePermissions,
+          [newRunningLog]
+        ).catch(() => {});
+      }
 
       // 3. Immediately send presence update for new task
       syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
         userId: currentUser.id,
-        employeeCode: currentUser.employeeCode,
+        employeeCode: currentUser.employeeCode || currentUser.id,
         userName: currentUser.name,
         role: currentUser.role,
         designation: currentDesignation,
@@ -748,9 +795,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Ensure Daily_Summary row is initialized immediately upon session start
     ensureDailySummaryForToday();
 
+    const initialRunningLog: TimeLog = {
+      id: newSegmentId,
+      userId: currentUser.id,
+      employeeCode: empCode,
+      userName: currentUser.name,
+      userAvatar: currentUser.avatar || '',
+      designation: currentDesignation,
+      task: currentTask,
+      date: getManilaDateString(new Date(now)),
+      startTime: new Date(now).toISOString(),
+      endTime: 'In Progress (5m Sync)',
+      durationSeconds: 1,
+      status: 'running',
+      geoTimezone: 'Asia/Manila',
+      geoLocalStartTime: getManilaTimeString(new Date(now)),
+      geoLocalEndTime: getManilaTimeString(new Date(now)),
+      mouseActivityAvg: 95,
+      keyboardActivityAvg: 90,
+      idleSeconds: 0,
+      notes: `Active task segment for ${currentTask}`,
+      appsUsed: [],
+    };
+    addTimeLog(initialRunningLog);
+
+    if (googleSheetsWebhookUrl) {
+      syncDataToGoogleSheetsWebhook(
+        googleSheetsWebhookUrl,
+        [initialRunningLog],
+        users,
+        auditLogs,
+        payrollRecords,
+        dailyAttendanceLogs,
+        idleLogs,
+        leaveRequests,
+        designationTasks,
+        rolePermissions,
+        [initialRunningLog]
+      ).catch(() => {});
+    }
+
     syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
       userId: currentUser.id,
-      employeeCode: currentUser.employeeCode,
+      employeeCode: currentUser.employeeCode || currentUser.id,
       userName: currentUser.name,
       role: currentUser.role,
       designation: currentDesignation,

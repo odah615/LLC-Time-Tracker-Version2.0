@@ -564,13 +564,17 @@ app.post('/api/timelogs', (req, res) => {
         }
       }
 
-      // If completing a task segment, update THAT exact segment in place and clean up any STALE running segments for THIS specific employee only
+      // Ensure segment ID is clean and non-empty
+      const incomingIds = new Set(list.map((l: any) => l.id));
+
       if (rawLog.status === 'completed') {
+        // Clean up old stale running placeholders that are NOT part of the incoming payload
         for (const [k, existingLog] of map.entries()) {
           const existingCode = String(existingLog.employeeCode || existingLog.userId || '').trim().toLowerCase();
           if (
             existingCode === canonicalCode &&
             k !== rawLog.id &&
+            !incomingIds.has(k) &&
             (existingLog.status === 'running' || String(k).startsWith('active-seg-') || String(k).startsWith('seg-running-'))
           ) {
             map.delete(k);
