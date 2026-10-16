@@ -290,8 +290,8 @@ export const deduplicateUsers = (rawUsers: User[]): User[] => {
         username: canonical.username || effectiveUser.username,
         employeeCode: canonical.code || effectiveUser.employeeCode,
         email: canonical.email || effectiveUser.email,
-        role: canonical.role || effectiveUser.role,
-        designation: canonical.designation || effectiveUser.designation || 'Outbound Agent',
+        role: u.role || canonical.role,
+        designation: u.designation || canonical.designation || 'Outbound Agent',
       };
     }
 
@@ -342,19 +342,11 @@ export const deduplicateUsers = (rawUsers: User[]): User[] => {
         name: chosenName,
         employeeCode: chosenCode,
         username: chosenUsername,
-        email: canonical?.email || existing.email || effectiveUser.email,
-        role:
-          existing.role && existing.role !== 'agent'
-            ? existing.role
-            : (effectiveUser.role || 'agent'),
-        designation:
-          existing.designation || effectiveUser.designation || 'Agent',
-        department:
-          existing.department || effectiveUser.department || 'Operations',
-        teamLeaderId:
-          existing.teamLeaderId ||
-          effectiveUser.teamLeaderId ||
-          'usr-llc-0003',
+        email: effectiveUser.email || existing.email || canonical?.email || '',
+        role: effectiveUser.role || existing.role || 'agent',
+        designation: effectiveUser.designation || existing.designation || 'Outbound Agent',
+        department: effectiveUser.department || existing.department || 'Operations',
+        teamLeaderId: effectiveUser.teamLeaderId !== undefined ? effectiveUser.teamLeaderId : existing.teamLeaderId,
         password:
           existingHasRealPassword
             ? existing.password

@@ -23,6 +23,7 @@ import { getManilaDateString, getManilaTimeString, formatLogStartTime, formatLog
 import { getJitteredPollInterval } from '../lib/fetchUtils';
 import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee, isPlaceholderName, normalizeDesignation } from '../lib/userUtils';
 import {
+  getAuthHeaders,
   syncDataToGoogleSheetsWebhook,
   syncEmployeesToGoogleSheetsWebhook,
   syncAgentHeartbeatToSheets,
@@ -1112,17 +1113,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addUser = (userData: Omit<User, 'id'>) => {
     const newUser: User = {
       ...userData,
-      id: `usr-${Date.now()}`,
+      id: userData.employeeCode || `usr-${Date.now()}`,
     };
-    setUsers((prev) => [...prev, newUser]);
+    setUsers((prev) => {
+      const updated = deduplicateUsers([...prev, newUser]);
+      localStorage.setItem('trackpulse_users', JSON.stringify(updated));
+      return updated;
+    });
+
+    fetch('/api/users', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify([newUser]),
+    }).catch((err) => console.warn('Error saving user via /api/users:', err));
+
+    if (googleSheetsWebhookUrl) {
+      syncEmployeesToGoogleSheetsWebhook(googleSheetsWebhookUrl, [newUser]).catch(() => {});
+    }
   };
 
   const updateUser = (id: string, data: Partial<User>) => {
-    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...data } : u)));
+    let targetUser: User | null = null;
+    setUsers((prev) => {
+      const updated = prev.map((u) => {
+        if (
+          u.id === id ||
+          u.employeeCode === id ||
+          (u.username && u.username.toLowerCase() === id.toLowerCase())
+        ) {
+          const merged = { ...u, ...data };
+          targetUser = merged;
+          return merged;
+        }
+        return u;
+      });
+      const deduped = deduplicateUsers(updated);
+      localStorage.setItem('trackpulse_users', JSON.stringify(deduped));
+      return deduped;
+    });
+
+    if (targetUser) {
+      const userToSave: User = targetUser;
+      fetch('/api/users', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify([userToSave]),
+      }).catch((err) => console.warn('Error updating user via /api/users:', err));
+
+      if (googleSheetsWebhookUrl) {
+        syncEmployeesToGoogleSheetsWebhook(googleSheetsWebhookUrl, [userToSave]).catch(() => {});
+      }
+    }
   };
 
   const deleteUser = (id: string) => {
-    setUsers((prev) => prev.filter((u) => u.id !== id));
+    setUsers((prev) => {
+      const filtered = prev.filter((u) => u.id !== id && u.employeeCode !== id);
+      localStorage.setItem('trackpulse_users', JSON.stringify(filtered));
+      if (googleSheetsWebhookUrl) {
+        syncEmployeesToGoogleSheetsWebhook(googleSheetsWebhookUrl, filtered).catch(() => {});
+      }
+      return filtered;
+    });
   };
 
   const resetUserPassword = (userId: string, newPass: string) => {};
