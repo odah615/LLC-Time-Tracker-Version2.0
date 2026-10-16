@@ -25,6 +25,7 @@ import {
   Calendar,
   KeyRound,
   Lock,
+  Search,
 } from 'lucide-react';
 import {
   BarChart,
@@ -60,9 +61,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     currentUser,
     addAuditLog,
     setIsDesktopDockView,
+    designationList,
   } = useApp();
 
   const [resetModalUser, setResetModalUser] = useState<User | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title?: string;
@@ -143,6 +146,46 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           fromValue: fromRole,
           toValue: toRole,
           details: `Changed system role for ${usr.name} from ${fromRole} to ${toRole}.`,
+        });
+      },
+    });
+  };
+
+  const handleDesignationChangePrompt = (usr: User, newDesignation: string) => {
+    if (usr.designation === newDesignation) return;
+
+    let newRole: any = 'agent';
+    if (newDesignation === 'Admin') newRole = 'admin';
+    else if (newDesignation === 'Team Leader') newRole = 'team_lead';
+    else if (newDesignation === 'Trainer') newRole = 'trainer';
+    else if (newDesignation === 'QA Specialist') newRole = 'qa';
+    else if (newDesignation === 'Writer') newRole = 'writer';
+    else if (newDesignation === 'HR') newRole = 'hr';
+    else if (newDesignation === 'Payroll Officer') newRole = 'payroll';
+
+    const fromVal = usr.designation || usr.role;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Confirm Designation Change',
+      description: `Are you sure you want to change the designation for ${usr.name}? This will update their designation to "${newDesignation}" and adjust active tracking task permissions.`,
+      employeeName: usr.name,
+      employeeCode: usr.employeeCode,
+      fromValue: fromVal,
+      toValue: newDesignation,
+      confirmText: 'Yes, Change Designation',
+      variant: 'warning',
+      action: () => {
+        updateUser(usr.id, { designation: newDesignation as any, role: newRole });
+        addAuditLog({
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          actorRole: currentUser.role,
+          category: 'Designation Change',
+          targetEmployeeId: usr.id,
+          targetEmployeeName: usr.name,
+          fromValue: fromVal,
+          toValue: newDesignation,
+          details: `Changed designation for ${usr.name} from "${fromVal}" to "${newDesignation}".`,
         });
       },
     });
@@ -318,6 +361,38 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   }, [filteredLogsForCharts]);
 
   const visibleUsers = useMemo(() => users.filter((u) => !u.isSecretBackup), [users]);
+
+  const filteredUsers = useMemo(() => {
+    return visibleUsers.filter((u) => {
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase().trim();
+      return (
+        u.name.toLowerCase().includes(q) ||
+        (u.username && u.username.toLowerCase().includes(q)) ||
+        u.employeeCode.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.designation && u.designation.toLowerCase().includes(q)) ||
+        (u.role && u.role.toLowerCase().includes(q))
+      );
+    });
+  }, [visibleUsers, searchTerm]);
+
+  const designationOptions = useMemo(() => {
+    const primary = [
+      'Outbound Agent',
+      'Inbound Agent',
+      'Team Leader',
+      'Trainer',
+      'Admin',
+      'QA Specialist',
+      'Writer',
+      'HR',
+      'Payroll Officer',
+    ];
+    const combined = new Set([...primary, ...(designationList || [])]);
+    return Array.from(combined).filter(Boolean);
+  }, [designationList]);
+
   const activeDepartments = useMemo(() => {
     const depts = new Set(
       operationalStaffUsers
@@ -327,12 +402,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     return Array.from(depts);
   }, [operationalStaffUsers]);
 
-  const totalPages = Math.ceil(visibleUsers.length / pageSize) || 1;
+  const totalPages = Math.ceil(filteredUsers.length / pageSize) || 1;
   const safePage = Math.min(currentPage, totalPages);
   const paginatedUsers = useMemo(() => {
     const start = (safePage - 1) * pageSize;
-    return visibleUsers.slice(start, start + pageSize);
-  }, [visibleUsers, safePage, pageSize]);
+    return filteredUsers.slice(start, start + pageSize);
+  }, [filteredUsers, safePage, pageSize]);
 
   return (
     <div id="admin-dashboard-view" className="space-y-6">
@@ -600,19 +675,46 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       </div>
 
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
           <div>
             <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
               <Users className="w-5 h-5 text-blue-600" /> Employee Directory
             </h3>
             <p className="text-xs text-slate-500">Manage designations, roles, team leads, and assigned supervisors</p>
           </div>
-          <button
-            onClick={onOpenAddUserModal}
-            className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm"
-          >
-            <Plus className="w-4 h-4" /> Add Employee
-          </button>
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-64">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search name, code, email, role..."
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-7 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setCurrentPage(1);
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <button
+              onClick={onOpenAddUserModal}
+              className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm shrink-0"
+            >
+              <Plus className="w-4 h-4" /> Add Employee
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -628,131 +730,139 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
-              {paginatedUsers.map((usr) => {
-                const teamLeadsAndTrainers = users.filter(
-                  (u) => u.role === 'team_lead' || u.role === 'trainer' || u.role === 'admin'
-                );
-                const isSuperAdminUsr =
-                  usr.employeeCode.toLowerCase() === 'superadmin' ||
-                  usr.id === 'usr-superadmin-red' ||
-                  usr.id === 'usr-superadmin-root' ||
-                  usr.email === 'admin@llc.com';
+              {paginatedUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-slate-400 font-medium">
+                    No employees matching "{searchTerm}" found.
+                  </td>
+                </tr>
+              ) : (
+                paginatedUsers.map((usr) => {
+                  const teamLeadsAndTrainers = users.filter(
+                    (u) => u.role === 'team_lead' || u.role === 'trainer' || u.role === 'admin'
+                  );
+                  const isSuperAdminUsr =
+                    usr.employeeCode.toLowerCase() === 'superadmin' ||
+                    usr.id === 'usr-superadmin-red' ||
+                    usr.id === 'usr-superadmin-root' ||
+                    usr.email === 'admin@llc.com';
 
-                return (
-                  <tr key={usr.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3.5 px-4 font-mono font-bold text-blue-600 whitespace-nowrap">
-                      #{usr.employeeCode}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-2.5">
-                        <UserAvatar
-                          name={usr.name}
-                          role={usr.role}
-                          size="md"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                            <span>{usr.name}</span>
-                            {usr.username && (
-                              <span className="text-[10px] font-mono font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200" title="System Login Username">
-                                @{usr.username}
-                              </span>
-                            )}
+                  return (
+                    <tr key={usr.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3.5 px-4 font-mono font-bold text-blue-600 whitespace-nowrap">
+                        #{usr.employeeCode}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <div className="flex items-center gap-2.5">
+                          <UserAvatar
+                            name={usr.name}
+                            role={usr.role}
+                            size="md"
+                          />
+                          <div>
+                            <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                              <span>{usr.name}</span>
+                              {usr.username && (
+                                <span className="text-[10px] font-mono font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200" title="System Login Username">
+                                  @{usr.username}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-500">{usr.email}</div>
                           </div>
-                          <div className="text-[10px] text-slate-500">{usr.email}</div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {isSuperAdminUsr ? (
-                        <div
-                          className="flex items-center gap-1.5 bg-slate-100/90 border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-600 select-none cursor-not-allowed max-w-[155px]"
-                          title="SuperAdmin role is locked by system security"
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {isSuperAdminUsr ? (
+                          <div
+                            className="flex items-center gap-1.5 bg-slate-100/90 border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-600 select-none cursor-not-allowed max-w-[165px]"
+                            title="SuperAdmin role is locked by system security"
+                          >
+                            <Lock className="w-3 h-3 text-amber-600" />
+                            <span>Admin</span>
+                          </div>
+                        ) : currentUser.role === 'admin' ? (
+                          <select
+                            value={usr.designation || 'Outbound Agent'}
+                            onChange={(e) => handleDesignationChangePrompt(usr, e.target.value)}
+                            className="bg-slate-50 border border-slate-200 text-slate-900 font-bold rounded-lg px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 w-full max-w-[165px]"
+                          >
+                            {designationOptions.map((dName) => (
+                              <option key={dName} value={dName}>
+                                {dName}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div>
+                            <div className="font-semibold text-slate-900">{usr.designation || 'Outbound Agent'}</div>
+                            <span className="bg-blue-50 border border-blue-200 text-blue-800 px-2 py-0.5 rounded font-bold uppercase text-[10px] inline-block mt-0.5">
+                              {usr.role}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {isSuperAdminUsr ? (
+                          <div className="text-xs font-semibold text-slate-400 italic bg-slate-100/70 border border-slate-200 rounded-lg px-2.5 py-1 max-w-[170px]">
+                            Executive Board
+                          </div>
+                        ) : (
+                          <select
+                            value={getSelectedSupervisorValue(usr.teamLeaderId)}
+                            onChange={(e) => handleReassignSupervisorPrompt(usr, e.target.value)}
+                            className="bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-2 py-1 font-semibold text-xs focus:ring-2 focus:ring-blue-500 w-full max-w-[170px]"
+                          >
+                            <option value="">None / Direct</option>
+                            {teamLeadsAndTrainers.map((tl) => (
+                              <option key={tl.id} value={tl.username || tl.id}>
+                                {tl.name} ({tl.designation || (tl.role === 'admin' ? 'Admin' : tl.role === 'team_lead' ? 'Team Leader' : 'Trainer')})
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-slate-700 font-semibold whitespace-nowrap">
+                        {usr.joinDate || '2024-01-15'}
+                      </td>
+                      <td className="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap">
+                        {currentUser.role === 'admin' && (
+                          <button
+                            onClick={() => setResetModalUser(usr)}
+                            className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition-colors"
+                            title="Reset Employee Password"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onEditUser(usr)}
+                          className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
+                          title="Edit employee details"
                         >
-                          <Lock className="w-3 h-3 text-amber-600" />
-                          <span>Main Admin</span>
-                        </div>
-                      ) : currentUser.role === 'admin' ? (
-                        <select
-                          value={usr.role}
-                          onChange={(e) => handleRoleChangePrompt(usr, e.target.value)}
-                          className="bg-slate-50 border border-slate-200 text-slate-900 font-bold rounded-lg px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 w-full max-w-[155px]"
-                        >
-                          <option value="agent">Agent</option>
-                          <option value="team_lead">Team Leader</option>
-                          <option value="trainer">Trainer</option>
-                          <option value="va_admin">VA Admin</option>
-                          <option value="admin">Main Admin</option>
-                        </select>
-                      ) : (
-                        <div>
-                          <div className="font-semibold text-slate-900">{usr.designation}</div>
-                          <span className="bg-blue-50 border border-blue-200 text-blue-800 px-2 py-0.5 rounded font-bold uppercase text-[10px] inline-block mt-0.5">
-                            {usr.role}
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        {isSuperAdminUsr ? (
+                          <span
+                            className="p-1.5 rounded-lg bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed inline-block"
+                            title="SuperAdmin account is protected and cannot be deleted"
+                          >
+                            <Lock className="w-3.5 h-3.5 text-slate-400" />
                           </span>
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {isSuperAdminUsr ? (
-                        <div className="text-xs font-semibold text-slate-400 italic bg-slate-100/70 border border-slate-200 rounded-lg px-2.5 py-1 max-w-[170px]">
-                          Executive Board
-                        </div>
-                      ) : (
-                        <select
-                          value={getSelectedSupervisorValue(usr.teamLeaderId)}
-                          onChange={(e) => handleReassignSupervisorPrompt(usr, e.target.value)}
-                          className="bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-2 py-1 font-semibold text-xs focus:ring-2 focus:ring-blue-500 w-full max-w-[170px]"
-                        >
-                          <option value="">None / Direct</option>
-                          {teamLeadsAndTrainers.map((tl) => (
-                            <option key={tl.id} value={tl.username || tl.id}>
-                              {tl.name} ({tl.designation || (tl.role === 'admin' ? 'Admin' : tl.role === 'team_lead' ? 'Team Leader' : 'Trainer')})
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 font-mono text-slate-700 font-semibold whitespace-nowrap">
-                      {usr.joinDate || '2024-01-15'}
-                    </td>
-                    <td className="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap">
-                      {currentUser.role === 'admin' && (
-                        <button
-                          onClick={() => setResetModalUser(usr)}
-                          className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition-colors"
-                          title="Reset Employee Password"
-                        >
-                          <KeyRound className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => onEditUser(usr)}
-                        className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
-                        title="Edit employee details"
-                      >
-                        <Edit className="w-3.5 h-3.5" />
-                      </button>
-                      {isSuperAdminUsr ? (
-                        <span
-                          className="p-1.5 rounded-lg bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed inline-block"
-                          title="SuperAdmin account is protected and cannot be deleted"
-                        >
-                          <Lock className="w-3.5 h-3.5 text-slate-400" />
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => handleDeleteUserPrompt(usr)}
-                          className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
-                          title="Delete employee"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteUserPrompt(usr)}
+                            className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
+                            title="Delete employee"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -773,8 +883,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               <option value={20}>20</option>
             </select>
             <span className="ml-2 text-slate-500">
-              Showing {Math.min((safePage - 1) * pageSize + 1, visibleUsers.length)} to{' '}
-              {Math.min(safePage * pageSize, visibleUsers.length)} of {visibleUsers.length} employees
+              Showing {filteredUsers.length === 0 ? 0 : Math.min((safePage - 1) * pageSize + 1, filteredUsers.length)} to{' '}
+              {Math.min(safePage * pageSize, filteredUsers.length)} of {filteredUsers.length} employees
             </span>
           </div>
           <div className="flex items-center gap-2">

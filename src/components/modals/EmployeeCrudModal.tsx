@@ -61,10 +61,9 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
     return tlId;
   };
 
-  const allowedDesignationOptions = [...ALLOWED_DESIGNATIONS];
-  if (designation && !allowedDesignationOptions.includes(designation as any)) {
-    allowedDesignationOptions.unshift(designation as any);
-  }
+  const allowedDesignationOptions = Array.from(
+    new Set([...ALLOWED_DESIGNATIONS, ...(designationList || []), designation].filter(Boolean))
+  );
 
   const eligibleSupervisors = users.filter((u) => {
     if (u.isSecretBackup) return false;

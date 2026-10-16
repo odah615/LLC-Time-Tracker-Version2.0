@@ -6,6 +6,10 @@ export const ALLOWED_DESIGNATIONS = [
   'Team Leader',
   'Trainer',
   'Admin',
+  'QA Specialist',
+  'Writer',
+  'HR',
+  'Payroll Officer',
 ] as const;
 
 export type StandardDesignation = typeof ALLOWED_DESIGNATIONS[number];
@@ -16,6 +20,10 @@ export type Designation =
   | 'Team Leader'
   | 'Trainer'
   | 'Admin'
+  | 'QA Specialist'
+  | 'Writer'
+  | 'HR'
+  | 'Payroll Officer'
   | 'Agent' // Legacy fallback
   | string;
 
