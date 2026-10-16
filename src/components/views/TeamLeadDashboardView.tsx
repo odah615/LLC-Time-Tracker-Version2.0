@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { User, IdleLog, LeaveRequest } from '../../types';
 import { downloadDesktopSoftwarePackage, DesktopOS } from '../../lib/desktopDownloader';
+import { isEmployeeAssignedToSupervisor } from '../../lib/userUtils';
 import { UserAvatar } from '../UserAvatar';
 import { LiveAgentTasksBoard } from '../LiveAgentTasksBoard';
 import {
@@ -18,6 +19,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
+  Search,
 } from 'lucide-react';
 
 export const TeamLeadDashboardView: React.FC = () => {
@@ -39,9 +41,28 @@ export const TeamLeadDashboardView: React.FC = () => {
   const [agentPage, setAgentPage] = useState(1);
   const [idlePage, setIdlePage] = useState(1);
   const [leavePage, setLeavePage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
   const ITEMS_PER_PAGE = 10;
 
-  const teamAgents: User[] = users.filter((u) => u.role === 'agent');
+  const teamAgents: User[] = users.filter((u) => {
+    if (u.id === currentUser.id) return false;
+    if (currentUser.role === 'admin') return true;
+    return isEmployeeAssignedToSupervisor(u, currentUser, users);
+  });
+
+  const filteredAgents: User[] = teamAgents.filter((agent) => {
+    if (!searchTerm.trim()) return true;
+    const q = searchTerm.toLowerCase().trim();
+    return (
+      agent.name?.toLowerCase().includes(q) ||
+      agent.username?.toLowerCase().includes(q) ||
+      agent.email?.toLowerCase().includes(q) ||
+      agent.employeeCode?.toLowerCase().includes(q) ||
+      agent.designation?.toLowerCase().includes(q) ||
+      agent.department?.toLowerCase().includes(q)
+    );
+  });
+
   const pendingLeaves: LeaveRequest[] = leaveRequests.filter((r) => r.status === 'pending');
 
   const sortedIdleLogs: IdleLog[] = [...idleLogs].sort((a, b) => {
@@ -62,11 +83,11 @@ export const TeamLeadDashboardView: React.FC = () => {
     return items.slice(startIndex, startIndex + perPage);
   };
 
-  const totalAgentPages = Math.ceil(teamAgents.length / ITEMS_PER_PAGE) || 1;
+  const totalAgentPages = Math.ceil(filteredAgents.length / ITEMS_PER_PAGE) || 1;
   const totalIdlePages = Math.ceil(sortedIdleLogs.length / ITEMS_PER_PAGE) || 1;
   const totalLeavePages = Math.ceil(pendingLeaves.length / ITEMS_PER_PAGE) || 1;
 
-  const currentAgents: User[] = getPaginatedItems(teamAgents, agentPage);
+  const currentAgents: User[] = getPaginatedItems(filteredAgents, agentPage);
   const currentIdleLogs: IdleLog[] = getPaginatedItems(sortedIdleLogs, idlePage);
   const currentLeaves: LeaveRequest[] = getPaginatedItems(pendingLeaves, leavePage);
 
@@ -206,37 +227,52 @@ export const TeamLeadDashboardView: React.FC = () => {
                 <Users className="w-5 h-5 text-amber-600" /> Team Member Details
               </h3>
               <p className="text-xs text-slate-500">
-                Showing {currentAgents.length} of {teamAgents.length} team members (Page {agentPage} of {totalAgentPages})
+                Showing {currentAgents.length} of {filteredAgents.length} filtered team members ({teamAgents.length} total assigned)
               </p>
             </div>
-            <div className="flex items-center gap-1.5 self-end sm:self-auto">
-              <button
-                onClick={() => setAgentPage((prev) => Math.max(prev - 1, 1))}
-                disabled={agentPage === 1}
-                className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent transition-all flex items-center gap-1"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" /> Back
-              </button>
-              {Array.from({ length: totalAgentPages }, (_, i) => i + 1).map((pNum) => (
+            <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+              <div className="relative flex-1 sm:w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search team members by name, email, role..."
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setAgentPage(1);
+                  }}
+                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 text-slate-900 placeholder:text-slate-400 font-medium"
+                />
+              </div>
+              <div className="flex items-center gap-1.5 self-end sm:self-auto">
                 <button
-                  key={pNum}
-                  onClick={() => setAgentPage(pNum)}
-                  className={`w-7 h-7 rounded-lg text-xs font-bold transition-all ${
-                    agentPage === pNum
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
+                  onClick={() => setAgentPage((prev) => Math.max(prev - 1, 1))}
+                  disabled={agentPage === 1}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent transition-all flex items-center gap-1"
                 >
-                  {pNum}
+                  <ChevronLeft className="w-3.5 h-3.5" /> Back
                 </button>
-              ))}
-              <button
-                onClick={() => setAgentPage((prev) => Math.min(prev + 1, totalAgentPages))}
-                disabled={agentPage === totalAgentPages}
-                className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent transition-all flex items-center gap-1"
-              >
-                Next <ChevronRight className="w-3.5 h-3.5" />
-              </button>
+                {Array.from({ length: totalAgentPages }, (_, i) => i + 1).map((pNum) => (
+                  <button
+                    key={pNum}
+                    onClick={() => setAgentPage(pNum)}
+                    className={`w-7 h-7 rounded-lg text-xs font-bold transition-all ${
+                      agentPage === pNum
+                        ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    {pNum}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setAgentPage((prev) => Math.min(prev + 1, totalAgentPages))}
+                  disabled={agentPage === totalAgentPages}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent transition-all flex items-center gap-1"
+                >
+                  Next <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

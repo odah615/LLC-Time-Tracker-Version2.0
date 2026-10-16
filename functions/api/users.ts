@@ -26,7 +26,20 @@ export async function onRequestGet(context: { request: Request; env: Env }) {
       data = { employees: [] };
     }
 
-    const employees = Array.isArray(data.employees) ? data.employees : [];
+    const url = new URL(context.request.url);
+    const reqSupervisor = url.searchParams.get('supervisor') || url.searchParams.get('teamLeaderId');
+
+    let employees = Array.isArray(data.employees) ? data.employees : [];
+    if (reqSupervisor) {
+      const supLower = reqSupervisor.toLowerCase().trim();
+      employees = employees.filter((e: any) => {
+        const tl = String(e.teamLeaderId || e.supervisor || '').toLowerCase().trim();
+        const code = String(e.employeeCode || '').toLowerCase().trim();
+        const username = String(e.username || '').toLowerCase().trim();
+        return tl === supLower || tl.includes(supLower) || code === supLower || username === supLower;
+      });
+    }
+
     return new Response(JSON.stringify(employees), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

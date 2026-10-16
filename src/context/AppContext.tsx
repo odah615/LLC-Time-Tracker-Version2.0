@@ -21,7 +21,7 @@ import { doc, setDoc, deleteDoc, onSnapshot, collection, disableNetwork, enableN
 import { db } from '../lib/firebase';
 import { getManilaDateString, getManilaTimeString, formatLogStartTime, formatLogEndTime } from '../lib/dateUtils';
 import { getJitteredPollInterval } from '../lib/fetchUtils';
-import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee, isPlaceholderName } from '../lib/userUtils';
+import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee, isPlaceholderName, normalizeDesignation } from '../lib/userUtils';
 import {
   syncDataToGoogleSheetsWebhook,
   syncEmployeesToGoogleSheetsWebhook,
@@ -446,11 +446,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isTracking, setIsTracking] = useState<boolean>(Boolean(initialActiveSession));
   const [isPaused, setIsPaused] = useState<boolean>(Boolean(initialActiveSession?.isPaused));
   const [currentDesignation, setCurrentDesignation] = useState<Designation>(
-    initialActiveSession?.designation || currentUser.designation || 'Agent'
+    initialActiveSession?.designation || currentUser.designation || 'Outbound Agent'
   );
   const [currentTask, setCurrentTask] = useState<TaskCategory>(
     initialActiveSession?.task || 'Email Reachout'
   );
+
+  useEffect(() => {
+    if (currentUser?.designation) {
+      setCurrentDesignation(currentUser.designation);
+    }
+  }, [currentUser?.id, currentUser?.designation]);
 
   const taskStartTimeRef = useRef<number>(initialActiveSession?.taskStartTime || 0);
   const accumulatedPausedMsRef = useRef<number>(initialActiveSession?.accumulatedPausedMs || 0);
@@ -933,6 +939,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = (user: User, mode: 'webapp' | 'software' = 'webapp', token?: string) => {
     setCurrentUser(user);
+    setCurrentDesignation(user.designation || 'Outbound Agent');
     setIsAuthenticated(true);
     setLoginMode(mode);
     setIsDesktopDockView(mode === 'software');
@@ -1189,11 +1196,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const designationList = Object.keys(designationTasks);
   const getTasksForDesignation = (desig?: string) => {
-    const d = desig || currentUser.designation || 'Agent';
-    const tasks = designationTasks[d] || ['On Shift', 'Team Meeting'];
-    if (d === 'Agent' || d === 'Outbound Agent/Team') {
-      return tasks.filter((t) => t !== 'Email Interaction');
-    }
+    const raw = desig || currentDesignation || currentUser.designation || 'Outbound Agent';
+    const norm = normalizeDesignation(raw);
+    const tasks = designationTasks[raw] || designationTasks[norm] || designationTasks['Outbound Agent'] || [
+      'Email Reachout',
+      'Data Entry and Market Research',
+      'Follow-up',
+      'Training',
+      'Team Meeting',
+      'Coaching',
+    ];
     return tasks;
   };
 

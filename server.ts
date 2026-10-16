@@ -55,24 +55,35 @@ export function sanitizeUser(user: any): any {
 }
 
 const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
-  'Outbound Agent/Team': [
-    'Data Entry & Market Research',
+  'Outbound Agent': [
     'Email Reachout',
+    'Data Entry and Market Research',
+    'Data Entry & Market Research',
+    'Follow-up',
+    'Training',
+    'Team Meeting',
+    'Coaching',
+  ],
+  'Inbound Agent': [
+    'Email Reachout',
+    'Email',
+  ],
+  'Outbound Agent/Team': [
+    'Email Reachout',
+    'Data Entry and Market Research',
+    'Data Entry & Market Research',
     'Follow-up',
     'Training',
     'Team Meeting',
     'Coaching',
   ],
   'Inbound Agent/Team': [
-    'Email Interaction',
-    'Training',
-    'Team Meeting',
-    'Coaching',
+    'Email Reachout',
+    'Email',
   ],
   'Agent': [
-    'Data Entry & Market Research',
     'Email Reachout',
-    'Email Interaction',
+    'Data Entry and Market Research',
     'Follow-up',
     'Training',
     'Team Meeting',

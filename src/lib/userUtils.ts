@@ -428,3 +428,141 @@ export const verifyLocalPassword = async (
   }
   return trimmed === password;
 };
+
+/**
+ * Resolves an Assigned Supervisor reference (which may be username, employee code,
+ * legacy usr-id, or formatted name) to the authoritative supervisor User record.
+ */
+export const resolveSupervisor = (
+  rawSupervisor: string | undefined | null,
+  allUsers: User[]
+): User | null => {
+  if (!rawSupervisor) return null;
+  const raw = String(rawSupervisor).trim();
+  if (!raw || raw.toLowerCase() === 'none' || raw.toLowerCase().includes('direct executive') || raw.toLowerCase().includes('executive board')) {
+    return null;
+  }
+
+  const rawLower = raw.toLowerCase();
+  const rawUpper = raw.toUpperCase();
+
+  // 1. Exact match on username
+  const byUsername = allUsers.find((u) => u.username && u.username.toLowerCase() === rawLower);
+  if (byUsername) return byUsername;
+
+  // 2. Exact match on employeeCode (e.g. LLC-0025, LLC-0003, SuperAdmin)
+  const byCode = allUsers.find((u) => u.employeeCode && u.employeeCode.toUpperCase() === rawUpper);
+  if (byCode) return byCode;
+
+  // 3. Exact match on ID (e.g. usr-1791811080947, usr-llc-0003, usr-superadmin-red)
+  const byId = allUsers.find((u) => u.id === raw);
+  if (byId) return byId;
+
+  // 4. Match on name
+  const byName = allUsers.find((u) => u.name && u.name.toLowerCase() === rawLower);
+  if (byName) return byName;
+
+  // 5. Check if raw contains an employee code (e.g. "LLC-0025" inside a string or "usr-llc-0025")
+  const codeMatch = raw.match(/LLC[-_]?\d+/i);
+  if (codeMatch) {
+    const extracted = codeMatch[0].toUpperCase().replace('_', '-');
+    const byExtractedCode = allUsers.find((u) => u.employeeCode && u.employeeCode.toUpperCase() === extracted);
+    if (byExtractedCode) return byExtractedCode;
+  }
+
+  // 6. Check common legacy IDs
+  if (rawLower.includes('superadmin') || rawLower === 'usr-superadmin-red') {
+    return allUsers.find((u) => u.role === 'admin' || u.employeeCode?.toUpperCase() === 'SUPERADMIN') || null;
+  }
+  if (rawLower.includes('usr-llc-0003') || rawLower.includes('pia')) {
+    return allUsers.find((u) => u.employeeCode?.toUpperCase() === 'LLC-0003' || u.username === 'trainer') || null;
+  }
+  if (rawLower.includes('usr-1791811080947') || rawLower.includes('mpolo') || rawLower.includes('marco polo')) {
+    return allUsers.find((u) => u.username === 'mpolo' || u.employeeCode?.toUpperCase() === 'LLC-0025') || null;
+  }
+
+  return null;
+};
+
+/**
+ * Returns the canonical username of the assigned supervisor, or empty string if unassigned.
+ */
+export const getSupervisorUsername = (
+  rawSupervisor: string | undefined | null,
+  allUsers: User[]
+): string => {
+  const supervisor = resolveSupervisor(rawSupervisor, allUsers);
+  if (supervisor) {
+    return supervisor.username || supervisor.name;
+  }
+  if (!rawSupervisor) return '';
+  const clean = String(rawSupervisor).trim();
+  if (clean.toLowerCase() === 'none' || clean.toLowerCase().includes('direct') || clean.toLowerCase().includes('executive')) {
+    return '';
+  }
+  return clean;
+};
+
+/**
+ * Determines whether an employee is assigned to a specific supervisor (or is the supervisor themselves).
+ */
+export const isEmployeeAssignedToSupervisor = (
+  emp: User,
+  supervisor: User,
+  allUsers: User[]
+): boolean => {
+  // A supervisor always sees themselves
+  if (
+    emp.id === supervisor.id ||
+    (emp.employeeCode && supervisor.employeeCode && emp.employeeCode.toUpperCase() === supervisor.employeeCode.toUpperCase()) ||
+    (emp.username && supervisor.username && emp.username.toLowerCase() === supervisor.username.toLowerCase())
+  ) {
+    return true;
+  }
+
+  if (!emp.teamLeaderId) {
+    return false;
+  }
+
+  const resolved = resolveSupervisor(emp.teamLeaderId, allUsers);
+  if (!resolved) {
+    // Fallback: check raw string match against supervisor's identity fields
+    const raw = emp.teamLeaderId.trim();
+    if (supervisor.username && raw.toLowerCase() === supervisor.username.toLowerCase()) return true;
+    if (supervisor.employeeCode && raw.toUpperCase() === supervisor.employeeCode.toUpperCase()) return true;
+    if (supervisor.id && raw === supervisor.id) return true;
+    if (supervisor.name && raw.toLowerCase() === supervisor.name.toLowerCase()) return true;
+    return false;
+  }
+
+  return Boolean(
+    resolved.id === supervisor.id ||
+    (resolved.username && supervisor.username && resolved.username.toLowerCase() === supervisor.username.toLowerCase()) ||
+    (resolved.employeeCode && supervisor.employeeCode && resolved.employeeCode.toUpperCase() === supervisor.employeeCode.toUpperCase())
+  );
+};
+
+/**
+ * Normalizes legacy designations to the 5 standardized options.
+ */
+export const normalizeDesignation = (raw?: string | null): string => {
+  if (!raw) return 'Outbound Agent';
+  const clean = raw.trim();
+  if (/^outbound/i.test(clean)) return 'Outbound Agent';
+  if (/^inbound/i.test(clean)) return 'Inbound Agent';
+  if (/^team\s*lead/i.test(clean)) return 'Team Leader';
+  if (/^trainer/i.test(clean)) return 'Trainer';
+  if (/^admin/i.test(clean)) return 'Admin';
+  if (/^super\s*admin/i.test(clean)) return 'Admin';
+  // Preserve legacy "Agent" as is, so it can be flagged for manual assignment
+  return clean;
+};
+
+/**
+ * Returns true if an employee's designation is legacy/ambiguous and requires manual review.
+ */
+export const isAmbiguousLegacyDesignation = (designation?: string | null): boolean => {
+  if (!designation) return true;
+  const clean = designation.trim();
+  return clean === 'Agent' || clean === 'Outbound Agent/Team' || clean === 'Inbound Agent/Team';
+};

@@ -1,17 +1,22 @@
 export type UserRole = 'agent' | 'team_lead' | 'trainer' | 'hr' | 'payroll' | 'admin' | 'va_admin' | 'qa' | 'writer';
 
+export const ALLOWED_DESIGNATIONS = [
+  'Outbound Agent',
+  'Inbound Agent',
+  'Team Leader',
+  'Trainer',
+  'Admin',
+] as const;
+
+export type StandardDesignation = typeof ALLOWED_DESIGNATIONS[number];
+
 export type Designation =
-  | 'Outbound Agent/Team'
-  | 'Inbound Agent/Team'
-  | 'Agent'
+  | 'Outbound Agent'
+  | 'Inbound Agent'
   | 'Team Leader'
   | 'Trainer'
   | 'Admin'
-  | 'Super Admin'
-  | 'QA Specialist'
-  | 'Writer'
-  | 'HR'
-  | 'Payroll Officer'
+  | 'Agent' // Legacy fallback
   | string;
 
 export type TaskCategory = string;

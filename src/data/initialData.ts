@@ -77,27 +77,18 @@ export const INITIAL_USERS: User[] = [
 ];
 
 export const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
-  'Outbound Agent/Team': [
-    'Data Entry & Market Research',
+  'Outbound Agent': [
     'Email Reachout',
+    'Data Entry and Market Research',
+    'Data Entry & Market Research',
     'Follow-up',
     'Training',
     'Team Meeting',
     'Coaching',
   ],
-  'Inbound Agent/Team': [
-    'Email Interaction',
-    'Training',
-    'Team Meeting',
-    'Coaching',
-  ],
-  'Agent': [
-    'Data Entry & Market Research',
+  'Inbound Agent': [
     'Email Reachout',
-    'Follow-up',
-    'Training',
-    'Team Meeting',
-    'Coaching',
+    'Email',
   ],
   'Team Leader': [
     'Team Supervision',
@@ -121,6 +112,27 @@ export const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
   'Super Admin': [
     'System Ops Review',
     'On Shift',
+  ],
+  'Outbound Agent/Team': [
+    'Email Reachout',
+    'Data Entry and Market Research',
+    'Data Entry & Market Research',
+    'Follow-up',
+    'Training',
+    'Team Meeting',
+    'Coaching',
+  ],
+  'Inbound Agent/Team': [
+    'Email Reachout',
+    'Email',
+  ],
+  'Agent': [
+    'Email Reachout',
+    'Data Entry and Market Research',
+    'Follow-up',
+    'Training',
+    'Team Meeting',
+    'Coaching',
   ],
   'QA Specialist': [
     'QA Email Audit',
@@ -258,18 +270,12 @@ export const TASK_LIST: TaskCategory[] = [
   'Lunch Break',
 ];
 
-export const DESIGNATION_LIST: Designation[] = [
-  'Outbound Agent/Team',
-  'Inbound Agent/Team',
-  'Agent',
+export const DESIGNATION_LIST: string[] = [
+  'Outbound Agent',
+  'Inbound Agent',
   'Team Leader',
   'Trainer',
   'Admin',
-  'Super Admin',
-  'QA Specialist',
-  'Writer',
-  'HR',
-  'Payroll Officer',
 ];
 
 export const INITIAL_WORLD_CLOCKS: WorldClockItem[] = [

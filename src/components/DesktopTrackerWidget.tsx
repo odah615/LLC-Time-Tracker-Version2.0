@@ -283,7 +283,7 @@ export const DesktopTrackerWidget: React.FC<DesktopTrackerWidgetProps> = ({ isFu
               <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
                 <span>Task: <strong className="text-blue-600 font-semibold">{currentTask}</strong></span>
                 <span>•</span>
-                <span>Role: <strong className="text-slate-700 font-semibold">{currentUser.designation || currentDesignation}</strong></span>
+                <span>Designation: <strong className="text-slate-700 font-semibold">{currentUser.designation || currentDesignation}</strong></span>
               </div>
             </div>
 

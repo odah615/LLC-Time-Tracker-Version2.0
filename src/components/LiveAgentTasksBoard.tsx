@@ -9,6 +9,7 @@ import {
   formatLogStartTime,
   formatLastSeen,
 } from '../lib/dateUtils';
+import { isEmployeeAssignedToSupervisor } from '../lib/userUtils';
 import {
   Radio,
   Clock,
@@ -149,12 +150,25 @@ export const LiveAgentTasksBoard: React.FC<LiveAgentTasksBoardProps> = ({
   };
 
   const targetUsers = useMemo(() => {
+    if (!teamLeaderId) {
+      return users.filter((u) => !isAdminAccount(u));
+    }
+    const leaderUser = users.find(
+      (u) =>
+        u.id === teamLeaderId ||
+        (u.username && u.username.toLowerCase() === teamLeaderId.toLowerCase()) ||
+        (u.employeeCode && u.employeeCode.toUpperCase() === teamLeaderId.toUpperCase())
+    );
     return users.filter((u) => {
       if (isAdminAccount(u)) return false;
-      if (teamLeaderId && u.teamLeaderId !== teamLeaderId && u.id !== teamLeaderId) {
-        return false;
+      if (leaderUser) {
+        return isEmployeeAssignedToSupervisor(u, leaderUser, users);
       }
-      return true;
+      if (u.id === teamLeaderId) return true;
+      if (u.teamLeaderId && (u.teamLeaderId === teamLeaderId || u.teamLeaderId.toLowerCase() === teamLeaderId.toLowerCase())) {
+        return true;
+      }
+      return false;
     });
   }, [users, teamLeaderId]);
 
