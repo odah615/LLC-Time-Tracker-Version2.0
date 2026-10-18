@@ -458,6 +458,20 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     [filteredLogs]
   );
 
+  const taskCategoryBreakdown = useMemo(() => {
+    const map: Record<string, { seconds: number; count: number }> = {};
+    filteredLogs.forEach((log) => {
+      const taskName = log.task || 'Unspecified Task';
+      const duration = Number(log.durationSeconds) || 0;
+      if (!map[taskName]) {
+        map[taskName] = { seconds: 0, count: 0 };
+      }
+      map[taskName].seconds += duration;
+      map[taskName].count += 1;
+    });
+    return Object.entries(map).sort((a, b) => b[1].seconds - a[1].seconds);
+  }, [filteredLogs]);
+
   const livePeriodSession = useMemo(() => {
     const today = getManilaDateString();
     if (!isLogInPeriod(today, viewTab)) {
@@ -1086,7 +1100,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
         </div>
       )}
 
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="shrink-0 flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
@@ -1119,19 +1133,93 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             >
               Monthly View
             </button>
-            <button
-              onClick={() => handleTabSwitch('summary')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                viewTab === 'summary'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Daily Summary (Spreadsheet)
-            </button>
+            {!isPersonalView && (
+              <button
+                onClick={() => handleTabSwitch('summary')}
+                className={`px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                  viewTab === 'summary'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Daily Summary (Spreadsheet)
+              </button>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Date / Month Filter Controls */}
+            {viewTab === 'daily' && (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
+                <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="text-[11px] font-bold text-slate-500">Date:</span>
+                <input
+                  type="date"
+                  value={anchorDate}
+                  onChange={(e) => e.target.value && setAnchorDate(e.target.value)}
+                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
+                />
+                {anchorDate !== todayStr && (
+                  <button
+                    onClick={() => setAnchorDate(todayStr)}
+                    className="text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-700 font-extrabold px-1.5 py-0.5 rounded transition-all ml-1"
+                    title="Reset to Today"
+                  >
+                    Today
+                  </button>
+                )}
+              </div>
+            )}
+
+            {viewTab === 'weekly' && (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
+                <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="text-[11px] font-bold text-slate-500">Week:</span>
+                <input
+                  type="date"
+                  value={weekStartDate}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const w = getSundaySaturday(e.target.value);
+                      setWeekStartDate(w.start);
+                      setWeekEndDate(w.end);
+                    }
+                  }}
+                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
+                />
+                <span className="text-slate-400 text-xs">to</span>
+                <span className="text-xs font-mono font-bold text-slate-700">{formatDateDDMMYYYY(weekEndDate)}</span>
+              </div>
+            )}
+
+            {viewTab === 'monthly' && (
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
+                <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
+                >
+                  {MONTH_NAMES.map((name, idx) => (
+                    <option key={name} value={idx}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(Number(e.target.value))}
+                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
+                >
+                  {YEAR_OPTIONS.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {!isPersonalView && canSearchAgents && (
               <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 w-36 sm:w-44 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all shadow-sm">
                 <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -1260,12 +1348,66 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
           )}
         </div>
       ) : (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-          <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-            <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider">
-              {isPersonalView ? 'My Detailed Session Logs' : 'Detailed Itemized Session Logs'} ({filteredLogs.length} Entries)
-            </h4>
+        <div className="space-y-6">
+          {/* Section 3: Personal Task Category Breakdown */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <PieIcon className="w-4 h-4 text-blue-600" />
+                <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wider">
+                  Personal Task Category Breakdown ({getPeriodLabel()})
+                </h4>
+              </div>
+              <span className="text-[11px] text-slate-500 font-medium">
+                {taskCategoryBreakdown.length} Active Task Categories
+              </span>
+            </div>
+
+            {taskCategoryBreakdown.length === 0 ? (
+              <p className="text-xs text-slate-400 py-3 text-center">
+                No task category data available for this timeframe.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+                {taskCategoryBreakdown.map(([taskName, stats]) => {
+                  const percentOfTotal = totalGrossSeconds > 0
+                    ? Math.round((stats.seconds / totalGrossSeconds) * 100)
+                    : 0;
+                  return (
+                    <div
+                      key={taskName}
+                      className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 flex items-center justify-between hover:border-blue-300 transition-all shadow-2xs"
+                    >
+                      <div className="space-y-0.5 max-w-[70%]">
+                        <span className="text-xs font-bold text-slate-900 block truncate" title={taskName}>
+                          {taskName}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {stats.count} {stats.count === 1 ? 'session' : 'sessions'}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono text-sm font-extrabold text-blue-700 block">
+                          {formatHoursMins(stats.seconds)}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded">
+                          {percentOfTotal}% of period
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
+
+          {/* Section 4: My Detailed Session Logs */}
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider">
+                {isPersonalView ? 'My Detailed Session Logs' : 'Detailed Itemized Session Logs'} ({filteredLogs.length} Entries)
+              </h4>
+            </div>
           {filteredLogs.length === 0 ? (
             <div className="text-center py-8 text-slate-500 text-xs">
               No itemized logs match your filters.
@@ -1340,6 +1482,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
               </table>
             </div>
           )}
+        </div>
         </div>
       )}
     </div>

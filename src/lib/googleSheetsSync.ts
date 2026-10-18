@@ -1245,12 +1245,6 @@ function handlePost_(e) {
           existingDurations[sId] = safeDuration;
         }
 
-        var mirrorRow = [
-          sId, lRow[1], lRow[2], lRow[4], lRow[14], lRow[5], lRow[6], lRow[7],
-          lRow[8], lRow[9], lRow[10], lRow[11], lRow[12], lRow[13], String(log.notes || "").trim()
-        ];
-        upsertTimeMirrorRow_(ss, "Timesheets", mirrorRow);
-        upsertTimeMirrorRow_(ss, "Detailed_Time_Logs", mirrorRow);
         mirrorRowsWritten++;
         var cleanDate = normalizeLogDate_(lRow[5]);
         var cleanCode = String(lRow[1] || "").trim();
@@ -1261,7 +1255,6 @@ function handlePost_(e) {
         var item = affectedDailyKeys[key];
         rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
       });
-      rebuildWeeklyMonthlySummaries_(ss);
       SpreadsheetApp.flush();
 
       return jsonResponse({
@@ -1269,7 +1262,7 @@ function handlePost_(e) {
         action: action,
         received: logs.length,
         timeLogsPersisted: mirrorRowsWritten,
-        sheetsUpdated: ["Time_Logs", "Timesheets", "Detailed_Time_Logs", "Daily_Summary", "Weekly_Summary", "Monthly_Summary"]
+        sheetsUpdated: ["Time_Logs", "Daily_Summary"]
       });
     }
 
