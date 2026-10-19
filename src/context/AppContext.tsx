@@ -1017,10 +1017,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getTodayTrackedSeconds = useCallback((): number => {
     const today = getManilaDateString();
-    const total = timeLogs
-      .filter((l) => (l.userId === currentUser.id || l.employeeCode === currentUser.employeeCode) && l.date === today && l.status === 'completed')
-      .reduce((acc, l) => acc + (Number(l.durationSeconds) || 0), 0);
-    return total + (isTracking ? elapsedSeconds : 0);
+    return timeLogs
+      .filter((l) => {
+        const matchesUser =
+          (currentUser.id && l.userId === currentUser.id) ||
+          (currentUser.employeeCode && l.employeeCode === currentUser.employeeCode);
+        if (!matchesUser) return false;
+        const logDate = l.startTime ? getManilaDateString(new Date(l.startTime)) : (l.date || today);
+        return logDate === today;
+      })
+      .reduce((acc, l) => {
+        if (l.status === 'completed') {
+          return acc + (Number(l.durationSeconds) || 0);
+        }
+        if (l.status === 'running' && l.startTime) {
+          const startMs = new Date(l.startTime).getTime();
+          if (!isNaN(startMs)) {
+            const liveDur = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+            return acc + (isTracking ? 0 : liveDur);
+          }
+        }
+        return acc;
+      }, isTracking ? elapsedSeconds : 0);
   }, [timeLogs, currentUser.id, currentUser.employeeCode, isTracking, elapsedSeconds]);
 
   const todayTotalSeconds = getTodayTrackedSeconds();

@@ -207,13 +207,20 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
   };
 
   const normalizeDate = (rawDate?: string, startTimeIso?: string): string => {
-    const candidate = String(rawDate || (startTimeIso ? startTimeIso.split('T')[0] : '')).trim();
-    if (!candidate) return '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return candidate;
-    if (candidate.includes('T')) {
-      const isoDate = candidate.split('T')[0];
-      if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate;
+    // If rawDate is already a clean YYYY-MM-DD date without T, use it directly
+    if (rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim()) && !rawDate.includes('T')) {
+      return rawDate.trim();
     }
+    // If we have an ISO string, parse it to Manila Local Date (Asia/Manila)
+    const isoString = startTimeIso || (rawDate && rawDate.includes('T') ? rawDate : '');
+    if (isoString) {
+      const parsed = new Date(isoString);
+      if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() >= 2000) {
+        return getManilaDateString(parsed);
+      }
+    }
+    const candidate = String(rawDate || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return candidate;
     const parsed = new Date(candidate);
     if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() >= 2000) {
       return getManilaDateString(parsed);
