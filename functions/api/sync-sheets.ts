@@ -4,6 +4,18 @@ interface Env {
   LLCTRACKERV2_SHARED_SECRET?: string;
 }
 
+const isHtmlResponse = (str: string): boolean => {
+  if (!str) return false;
+  const trimmed = str.trim().toLowerCase();
+  return (
+    trimmed.startsWith('<!doctype') ||
+    trimmed.startsWith('<html') ||
+    trimmed.includes('<body') ||
+    trimmed.includes('google accounts') ||
+    trimmed.includes('accounts.google.com')
+  );
+};
+
 export async function onRequestPost(context: { request: Request; env: Env }) {
   try {
     const body = await context.request.json().catch(() => ({}));
@@ -20,35 +32,54 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
       ...(payload && typeof payload === 'object' ? payload : body),
     };
 
-    const upstreamRes = await fetch(scriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(scriptPayload),
-    });
+    let lastError = '';
+    let data: any = null;
 
-    if (!upstreamRes.ok) {
-      const errText = await upstreamRes.text().catch(() => '');
-      return new Response(
-        JSON.stringify({ success: false, error: `Apps Script upstream returned HTTP ${upstreamRes.status}: ${errText.slice(0, 300)}` }),
-        { status: 502, headers: { 'Content-Type': 'application/json' } }
-      );
+    // Retry loop up to 2 attempts for transient timeouts or script busy
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+
+        const upstreamRes = await fetch(scriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scriptPayload),
+        });
+
+        const respText = await upstreamRes.text();
+
+        if (isHtmlResponse(respText)) {
+          lastError = 'Server is temporarily busy processing requests. Retrying automatically...';
+          continue;
+        }
+
+        try {
+          data = JSON.parse(respText);
+        } catch {
+          lastError = 'Server returned temporary non-JSON response.';
+          continue;
+        }
+
+        if (data && data.status !== 'ERROR' && !data.error) {
+          break;
+        } else {
+          lastError = data?.message || data?.error || 'Apps Script sync reported temporary delay.';
+        }
+      } catch (e: any) {
+        lastError = e?.message || 'Network connection notice.';
+      }
     }
 
-    const respText = await upstreamRes.text();
-    let data: any = {};
-    try {
-      data = JSON.parse(respText);
-    } catch {
+    if (!data || data.status === 'ERROR' || data.error) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Apps Script returned non-JSON response.', raw: respText.slice(0, 300) }),
-        { status: 502, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if (data.status === 'ERROR' || data.error) {
-      return new Response(
-        JSON.stringify({ success: false, error: data.message || data.error || 'Apps Script sync returned error.', result: data }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+        JSON.stringify({
+          success: false,
+          error: lastError || 'Server is temporarily busy processing requests.',
+          result: data || { status: 'ERROR', message: lastError },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
     }
 

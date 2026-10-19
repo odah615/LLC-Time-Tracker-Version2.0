@@ -901,26 +901,59 @@ app.post('/api/sync-sheets', async (req, res) => {
     }
 
     if (cleanUrl) {
-      try {
-        const upstreamRes = await fetch(cleanUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload || { action: 'SYNC_ALL' }),
-        });
-        const respText = await upstreamRes.text();
-        let upstreamJson: any = {};
+      let upstreamJson: any = null;
+      let lastErr = '';
+
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          upstreamJson = JSON.parse(respText);
-        } catch {
-          upstreamJson = { status: 'SUCCESS', message: respText };
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+
+          const upstreamRes = await fetch(cleanUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || { action: 'SYNC_ALL' }),
+          });
+
+          const respText = await upstreamRes.text();
+          const trimmed = respText.trim().toLowerCase();
+
+          if (
+            trimmed.startsWith('<!doctype') ||
+            trimmed.startsWith('<html') ||
+            trimmed.includes('google accounts') ||
+            trimmed.includes('accounts.google.com')
+          ) {
+            lastErr = 'Server is temporarily busy processing requests.';
+            continue;
+          }
+
+          try {
+            upstreamJson = JSON.parse(respText);
+          } catch {
+            lastErr = 'Server returned temporary non-JSON response.';
+            continue;
+          }
+
+          if (upstreamJson && upstreamJson.status !== 'ERROR') {
+            break;
+          } else {
+            lastErr = upstreamJson?.message || 'Apps Script reported temporary delay.';
+          }
+        } catch (err: any) {
+          lastErr = err?.message || 'Network unreachable.';
         }
+      }
+
+      if (upstreamJson && upstreamJson.status !== 'ERROR') {
         return res.json({
           success: true,
           message: 'Successfully synchronized to Google Sheets and Central Server.',
           result: upstreamJson,
         });
-      } catch (err: any) {
-        console.warn('[Sync-Sheets] Upstream push notice:', err?.message || err);
+      } else {
+        console.warn('[Sync-Sheets] Upstream push notice:', lastErr);
       }
     }
 

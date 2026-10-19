@@ -1150,19 +1150,51 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
           <div className="flex flex-wrap items-center gap-2.5">
             {/* Date / Month Filter Controls */}
             {viewTab === 'daily' && (
-              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
-                <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="text-[11px] font-bold text-slate-500">Date:</span>
-                <input
-                  type="date"
-                  value={anchorDate}
-                  onChange={(e) => e.target.value && setAnchorDate(e.target.value)}
-                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
-                />
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-1.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parts = anchorDate.split('-').map(Number);
+                    const d = new Date(parts[0], parts[1] - 1, parts[2] - 1);
+                    setAnchorDate(getManilaDateString(d));
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                  title="Previous Day"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Prev</span>
+                </button>
+
+                <div className="flex items-center gap-1 px-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="text-[11px] font-bold text-slate-500">Date:</span>
+                  <input
+                    type="date"
+                    value={anchorDate}
+                    onChange={(e) => e.target.value && setAnchorDate(e.target.value)}
+                    className="bg-transparent text-slate-800 text-xs font-bold focus:outline-none cursor-pointer"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parts = anchorDate.split('-').map(Number);
+                    const d = new Date(parts[0], parts[1] - 1, parts[2] + 1);
+                    setAnchorDate(getManilaDateString(d));
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                  title="Next Day"
+                >
+                  <span className="hidden sm:inline">Next</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
                 {anchorDate !== todayStr && (
                   <button
+                    type="button"
                     onClick={() => setAnchorDate(todayStr)}
-                    className="text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-700 font-extrabold px-1.5 py-0.5 rounded transition-all ml-1"
+                    className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-2 py-1 rounded-lg transition-all cursor-pointer shadow-2xs ml-0.5"
                     title="Reset to Today"
                   >
                     Today
@@ -1172,51 +1204,148 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             )}
 
             {viewTab === 'weekly' && (
-              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
-                <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="text-[11px] font-bold text-slate-500">Week:</span>
-                <input
-                  type="date"
-                  value={weekStartDate}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      const w = getSundaySaturday(e.target.value);
-                      setWeekStartDate(w.start);
-                      setWeekEndDate(w.end);
-                    }
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-1.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sParts = weekStartDate.split('-').map(Number);
+                    const eParts = weekEndDate.split('-').map(Number);
+                    const s = new Date(sParts[0], sParts[1] - 1, sParts[2] - 7);
+                    const e = new Date(eParts[0], eParts[1] - 1, eParts[2] - 7);
+                    setWeekStartDate(getManilaDateString(s));
+                    setWeekEndDate(getManilaDateString(e));
                   }}
-                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
-                />
-                <span className="text-slate-400 text-xs">to</span>
-                <span className="text-xs font-mono font-bold text-slate-700">{formatDateDDMMYYYY(weekEndDate)}</span>
+                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                  title="Previous Week"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Prev Week</span>
+                </button>
+
+                <div className="flex items-center gap-1.5 px-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="text-[11px] font-bold text-slate-500">From:</span>
+                  <input
+                    type="date"
+                    value={weekStartDate}
+                    onChange={(e) => e.target.value && setWeekStartDate(e.target.value)}
+                    className="bg-transparent text-slate-800 text-xs font-bold focus:outline-none cursor-pointer"
+                  />
+                  <span className="text-[11px] font-bold text-slate-500">To:</span>
+                  <input
+                    type="date"
+                    value={weekEndDate}
+                    onChange={(e) => e.target.value && setWeekEndDate(e.target.value)}
+                    className="bg-transparent text-slate-800 text-xs font-bold focus:outline-none cursor-pointer"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sParts = weekStartDate.split('-').map(Number);
+                    const eParts = weekEndDate.split('-').map(Number);
+                    const s = new Date(sParts[0], sParts[1] - 1, sParts[2] + 7);
+                    const e = new Date(eParts[0], eParts[1] - 1, eParts[2] + 7);
+                    setWeekStartDate(getManilaDateString(s));
+                    setWeekEndDate(getManilaDateString(e));
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                  title="Next Week"
+                >
+                  <span className="hidden sm:inline">Next Week</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const w = getSundaySaturday(todayStr);
+                    setWeekStartDate(w.start);
+                    setWeekEndDate(w.end);
+                  }}
+                  className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-2 py-1 rounded-lg transition-all cursor-pointer shadow-2xs ml-0.5"
+                  title="This Week"
+                >
+                  This Week
+                </button>
               </div>
             )}
 
             {viewTab === 'monthly' && (
-              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
-                <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <select
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-1.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedMonth === 0) {
+                      setSelectedMonth(11);
+                      setSelectedYear((y) => y - 1);
+                    } else {
+                      setSelectedMonth((m) => m - 1);
+                    }
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                  title="Previous Month"
                 >
-                  {MONTH_NAMES.map((name, idx) => (
-                    <option key={name} value={idx}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(Number(e.target.value))}
-                  className="bg-transparent text-slate-800 text-xs font-semibold focus:outline-none cursor-pointer"
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Prev Month</span>
+                </button>
+
+                <div className="flex items-center gap-1.5 px-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                    className="bg-transparent text-slate-800 text-xs font-bold focus:outline-none cursor-pointer"
+                  >
+                    {MONTH_NAMES.map((name, idx) => (
+                      <option key={name} value={idx}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                    className="bg-transparent text-slate-800 text-xs font-bold focus:outline-none cursor-pointer"
+                  >
+                    {YEAR_OPTIONS.map((yr) => (
+                      <option key={yr} value={yr}>
+                        {yr}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedMonth === 11) {
+                      setSelectedMonth(0);
+                      setSelectedYear((y) => y + 1);
+                    } else {
+                      setSelectedMonth((m) => m + 1);
+                    }
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                  title="Next Month"
                 >
-                  {YEAR_OPTIONS.map((yr) => (
-                    <option key={yr} value={yr}>
-                      {yr}
-                    </option>
-                  ))}
-                </select>
+                  <span className="hidden sm:inline">Next Month</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    setSelectedMonth(now.getMonth());
+                    setSelectedYear(now.getFullYear());
+                  }}
+                  className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-2 py-1 rounded-lg transition-all cursor-pointer shadow-2xs ml-0.5"
+                  title="This Month"
+                >
+                  This Month
+                </button>
               </div>
             )}
 
