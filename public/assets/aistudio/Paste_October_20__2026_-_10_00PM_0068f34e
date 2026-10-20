@@ -1,0 +1,1460 @@
+/**
+ * LLC TIME TRACKER — Version 2 GOOGLE APPS SCRIPT WEBHOOK (V2 STANDALONE)
+ *
+ * System: LLC-Time-Tracker-V2
+ *
+ * Prerequisites (Project Settings > Script Properties):
+ * - LLCTRACKERV2_SPREADSHEET_ID
+ * - LLCTRACKERV2_SHARED_SECRET
+ *
+ * Deployment:
+ * 1. Replace Code.gs with this exact source.
+ * 2. Save.
+ * 3. Run setupTextColumns() once.
+ * 4. Deploy > Manage deployments > Edit > New version > Deploy.
+ */
+
+var PROHIBITED_SPREADSHEET_IDS = [
+  "1h8ssmDEcV-PMGlkpOzfQCtlRpnoT0CBQQveT3e4wPfA", // V1 Live
+  "1deaDnCKXjQeoke9PGiMOPgqovno1MhiIlEH8zm4cjBs"  // Original Sandbox
+];
+
+var TZ = "Asia/Manila";
+var MAX_SESSION_SECONDS = 16 * 3600;
+
+function jsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getLLCTRACKERV2Spreadsheet() {
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = (props.getProperty("LLCTRACKERV2_SPREADSHEET_ID") || "").trim();
+
+  if (!sheetId) {
+    throw new Error(
+      "Configuration Error: LLCTRACKERV2_SPREADSHEET_ID Script Property is not set in Apps Script. " +
+      "Version 2 requires an explicit LLCTRACKERV2_SPREADSHEET_ID to isolate production spreadsheet data."
+    );
+  }
+
+  if (PROHIBITED_SPREADSHEET_IDS.indexOf(sheetId) !== -1) {
+    throw new Error(
+      "Access denied: this spreadsheet belongs to V1 Live or the original Sandbox. " +
+      "Version 2 must use its dedicated spreadsheet."
+    );
+  }
+
+  return SpreadsheetApp.openById(sheetId);
+}
+
+function doGet(e) {
+  return jsonResponse({
+    status: "SUCCESS",
+    service: "LLC-Time-Tracker-Version-2",
+    message: "Version 2 Apps Script Webhook is active. Data queries are restricted to authenticated POST actions.",
+    timestamp: new Date().toISOString()
+  });
+}
+
+function asText_(v, kind) {
+  if (v instanceof Date) {
+    if (kind === "date") return Utilities.formatDate(v, TZ, "yyyy-MM-dd");
+    return v.toISOString();
+  }
+  return String(v === null || v === undefined ? "" : v).trim();
+}
+
+function forceTextColumns_(sheet, firstCol, numCols) {
+  sheet.getRange(1, firstCol, sheet.getMaxRows(), numCols).setNumberFormat("@");
+}
+
+function sanitizeDuration_(reported, startTxt, endTxt, existing) {
+  var d = Number(reported);
+  if (!isFinite(d) || d < 0) d = Number(existing) || 0;
+  var s = Date.parse(startTxt);
+  var e = endTxt ? Date.parse(endTxt) : Date.now();
+  if (!isNaN(s) && !isNaN(e)) {
+    var span = Math.max(0, Math.round((e - s) / 1000));
+    if (d > span + 60) d = span;
+  }
+  return Math.min(Math.round(d), MAX_SESSION_SECONDS);
+}
+
+function getEmployeeDirectoryCols(empSheet) {
+  var defaultHeaders = [
+    "Employee Code", "Username", "Full Name", "Email", "Role", "Designation",
+    "Date Hired", "Monthly Rate", "Hourly Rate", "Team Leader", "Screenshot Monitored",
+    "Activity Monitored", "Account Status", "Masked Password",
+    "AccountPassword", "mustChangePassword"
+  ];
+
+  if (empSheet.getLastRow() === 0) {
+    empSheet.appendRow(defaultHeaders);
+    formatHeaderRow(empSheet, defaultHeaders.length);
+  }
+
+  function normalizeHeader_(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function readHeaderMap_() {
+    var count = Math.max(empSheet.getLastColumn(), 1);
+    var values = empSheet.getRange(1, 1, 1, count).getValues()[0];
+    var map = {};
+    for (var i = 0; i < values.length; i++) {
+      var key = normalizeHeader_(values[i]);
+      if (key) map[key] = i + 1;
+    }
+    return map;
+  }
+
+  function ensureHeader_(canonical, aliases) {
+    var map = readHeaderMap_();
+    for (var i = 0; i < aliases.length; i++) {
+      var key = normalizeHeader_(aliases[i]);
+      if (map[key]) return map[key];
+    }
+    var nextCol = Math.max(empSheet.getLastColumn(), 0) + 1;
+    empSheet.getRange(1, nextCol).setValue(canonical);
+    return nextCol;
+  }
+
+  ensureHeader_("AccountPassword", ["accountpassword", "account password", "currentpassword", "current password", "password"]);
+  ensureHeader_("mustChangePassword", ["mustchangepassword", "must change password"]);
+
+  var colMap = readHeaderMap_();
+  var codeCol = colMap["employee code"] || colMap["code"] || colMap["employeecode"] || 1;
+  var userCol = colMap["username"] || colMap["user name"] || 2;
+  var nameCol = colMap["full name"] || colMap["name"] || colMap["employee name"] || 3;
+  var emailCol = colMap["email"] || colMap["email address"] || 4;
+  var roleCol = colMap["role"] || colMap["user role"] || 5;
+  var desigCol = colMap["designation"] || 6;
+  var hiredCol = colMap["date hired"] || colMap["date joined"] || colMap["join date"] || 7;
+  var monthlyCol = colMap["monthly rate"] || colMap["monthly rate (₱)"] || 8;
+  var hourlyCol = colMap["hourly rate"] || colMap["hourly rate (₱)"] || 9;
+  var tlCol = colMap["team leader"] || colMap["team leader id"] || colMap["supervisor"] || 10;
+  var scrCol = colMap["screenshot monitored"] || 11;
+  var actCol = colMap["activity monitored"] || 12;
+  var statusCol = colMap["account status"] || colMap["status"] || 13;
+  var maskedPwCol = colMap["masked password"] || colMap["account password (masked)"] || 14;
+  var pwCol = colMap["accountpassword"] || colMap["account password"] || colMap["currentpassword"] || colMap["current password"] || colMap["password"];
+  var mustChangeCol = colMap["mustchangepassword"] || colMap["must change password"];
+
+  return {
+    codeCol: codeCol,
+    userCol: userCol,
+    nameCol: nameCol,
+    emailCol: emailCol,
+    roleCol: roleCol,
+    desigCol: desigCol,
+    hiredCol: hiredCol,
+    monthlyCol: monthlyCol,
+    hourlyCol: hourlyCol,
+    tlCol: tlCol,
+    scrCol: scrCol,
+    actCol: actCol,
+    statusCol: statusCol,
+    maskedPwCol: maskedPwCol,
+    pwCol: pwCol,
+    mustChangeCol: mustChangeCol,
+    totalCols: Math.max(empSheet.getLastColumn(), pwCol, mustChangeCol)
+  };
+}
+
+function normalizeEmployeeCodeKey_(value) {
+  var key = String(value || "").trim();
+  if (!key) return "";
+  if (key.toLowerCase().indexOf("usr-") === 0) {
+    key = key.substring(4);
+    if (key.toLowerCase() === "superadmin-red") key = "SuperAdmin";
+  }
+  return key.toUpperCase();
+}
+
+function doPost(e) {
+  var skipLock = false;
+  try {
+    var act = String(JSON.parse(e.postData.contents).action || "").toUpperCase();
+    skipLock = act.indexOf("GET_") === 0 || act === "AUTH_LOGIN";
+  } catch (parseErr) {}
+
+  if (skipLock) return handlePost_(e);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (lockErr) {
+    return jsonResponse({ status: "ERROR", code: "BUSY", message: "Server busy, please retry." });
+  }
+  try {
+    return handlePost_(e);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function normalizeLogDate_(value) {
+  if (value instanceof Date) return Utilities.formatDate(value, TZ, "yyyy-MM-dd");
+  var txt = String(value || "").trim();
+  var match = txt.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  var parsed = Date.parse(txt);
+  if (!isNaN(parsed)) return Utilities.formatDate(new Date(parsed), TZ, "yyyy-MM-dd");
+  return Utilities.formatDate(new Date(), TZ, "yyyy-MM-dd");
+}
+
+function formatSummaryDuration_(seconds) {
+  var safe = Math.max(0, Math.round(Number(seconds) || 0));
+  return Math.floor(safe / 3600) + "h " + Math.floor((safe % 3600) / 60) + "m";
+}
+
+function upsertTimeMirrorRow_(ss, tabName, rowData) {
+  var headers = [
+    "Session ID", "Employee Code", "Employee Name", "Designation", "Task Category",
+    "Date", "Start Time", "End Time", "Duration (Seconds)", "Total Time",
+    "Idle Deductions (Mins)", "Mouse Avg %", "Keyboard Avg %", "Status", "Notes"
+  ];
+  var sheet = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(headers);
+    formatHeaderRow(sheet, headers.length);
+  }
+  forceTextColumns_(sheet, 6, 3);
+  var key = String(rowData[0] || "").trim();
+  if (!key) return;
+  var targetRow = -1;
+  var last = sheet.getLastRow();
+  if (last > 1) {
+    var ids = sheet.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0] || "").trim() === key) { targetRow = i + 2; break; }
+    }
+  }
+  if (targetRow > 0) sheet.getRange(targetRow, 1, 1, headers.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  if (sheet.getLastRow() > 1) sheet.getRange(2, 12, sheet.getLastRow() - 1, 2).setNumberFormat('0"%"');
+}
+
+function rebuildDailySummaryRow_(ss, workDate, employeeCode, defaultEmpInfo) {
+  var summary = ss.getSheetByName("Daily_Summary") || ss.insertSheet("Daily_Summary");
+  var headers = [
+    "Date", "Employee Code", "Employee Name", "Designation", "Tasks Worked On",
+    "First Clock-In (Manila)", "Last Clock-Out (Manila)", "Gross Tracked Shift",
+    "Total Idle / Breaks", "Net Productive Work", "Duration (Seconds)",
+    "Avg Activity %", "Shift Status", "Log Entries"
+  ];
+  if (summary.getLastRow() === 0) {
+    summary.appendRow(headers);
+    formatHeaderRow(summary, headers.length);
+  }
+
+  var canonical = ss.getSheetByName("Time_Logs");
+  var matched = [];
+  if (canonical && canonical.getLastRow() > 1) {
+    var source = canonical.getRange(2, 1, canonical.getLastRow() - 1, 16).getValues();
+    for (var i = 0; i < source.length; i++) {
+      var rowId = String(source[i][0] || "").trim().toLowerCase();
+      if (rowId.indexOf("live-") === 0) continue;
+      var rowDate = normalizeLogDate_(source[i][5]);
+      var rowCode = String(source[i][1] || "").trim().toUpperCase();
+      if (rowDate === workDate && rowCode === String(employeeCode || "").trim().toUpperCase()) matched.push(source[i]);
+    }
+  }
+
+  var employeeName = (defaultEmpInfo && defaultEmpInfo.name) || "";
+  var designation = (defaultEmpInfo && defaultEmpInfo.designation) || "Agent";
+  var firstStart = (defaultEmpInfo && defaultEmpInfo.firstCheckin) || "";
+
+  if (!employeeName) {
+    var empSheet = ss.getSheetByName("Employee_Directory");
+    if (empSheet && empSheet.getLastRow() > 1) {
+      var cols = getEmployeeDirectoryCols(empSheet);
+      var eRows = empSheet.getRange(2, 1, empSheet.getLastRow() - 1, cols.totalCols).getValues();
+      for (var eI = 0; eI < eRows.length; eI++) {
+        if (String(eRows[eI][cols.codeCol - 1] || "").trim().toUpperCase() === String(employeeCode || "").trim().toUpperCase()) {
+          employeeName = String(eRows[eI][cols.nameCol - 1] || "").trim();
+          designation = String(eRows[eI][cols.desigCol - 1] || "Agent").trim();
+          break;
+        }
+      }
+    }
+  }
+
+  var totalSeconds = 0, idleMinutes = 0, activityTotal = 0, activityCount = 0;
+  var tasks = {}, inProgress = false;
+  var lastEnd = "", firstKey = null, lastKey = null;
+
+  if (matched.length > 0) {
+    matched.forEach(function(r) {
+      employeeName = employeeName || String(r[2] || "").trim();
+      designation = designation || String(r[4] || "").trim();
+      var task = String(r[14] || "").trim();
+      if (task) tasks[task] = true;
+      totalSeconds += Math.max(0, Number(r[8]) || 0);
+      idleMinutes += Math.max(0, Number(r[10]) || 0);
+      [r[11], r[12]].forEach(function(v) {
+        var n = Number(v);
+        if (v !== "" && v !== null && v !== undefined && isFinite(n)) { activityTotal += n; activityCount++; }
+      });
+      var start = String(r[6] || "").trim();
+      var end = String(r[7] || "").trim();
+      var startParsed = Date.parse(start); if (isNaN(startParsed)) startParsed = start;
+      var endParsed = Date.parse(end); if (isNaN(endParsed)) endParsed = end;
+      if (start && (firstKey === null || startParsed < firstKey)) { firstKey = startParsed; firstStart = start; }
+      if (end && (lastKey === null || endParsed > lastKey)) { lastKey = endParsed; lastEnd = end; }
+      var status = String(r[13] || "").toLowerCase();
+      if (!end || /active|running|tracking|in progress/.test(status)) inProgress = true;
+    });
+  }
+
+  totalSeconds = Math.min(Math.round(totalSeconds), 24 * 3600);
+  var idleSeconds = Math.round(idleMinutes * 60);
+  var summaryRow = [
+    workDate, String(employeeCode || "").trim().toUpperCase(), employeeName || "Employee", designation || "Agent",
+    Object.keys(tasks).join(", "), firstStart, lastEnd,
+    formatSummaryDuration_(totalSeconds), formatSummaryDuration_(idleSeconds),
+    formatSummaryDuration_(Math.max(0, totalSeconds - idleSeconds)), totalSeconds,
+    activityCount ? Math.round(activityTotal / activityCount) : 0,
+    inProgress ? "In Progress" : (matched.length > 0 ? "Completed" : "In Progress"), matched.length
+  ];
+
+  var target = -1, last = summary.getLastRow();
+  if (last > 1) {
+    var keys = summary.getRange(2, 1, last - 1, 2).getValues();
+    for (var j = 0; j < keys.length; j++) {
+      if (normalizeLogDate_(keys[j][0]) === workDate && String(keys[j][1] || "").trim().toUpperCase() === String(employeeCode || "").trim().toUpperCase()) { target = j + 2; break; }
+    }
+  }
+  if (target > 0) summary.getRange(target, 1, 1, headers.length).setValues([summaryRow]);
+  else summary.appendRow(summaryRow);
+  if (summary.getLastRow() > 1) summary.getRange(2, 12, summary.getLastRow() - 1, 1).setNumberFormat('0"%"');
+}
+
+function formatDetailedDuration_(seconds) {
+  var s = Math.max(0, Math.round(Number(seconds) || 0));
+  var h = Math.floor(s / 3600);
+  var m = Math.floor((s % 3600) / 60);
+  var sec = s % 60;
+  if (h > 0) return h + "h " + m + "m " + sec + "s";
+  return m + "m " + sec + "s";
+}
+
+function upsertLivePresenceRow_(ss, p) {
+  p = p || {};
+  var sh = ss.getSheetByName("Live_Presence") || ss.insertSheet("Live_Presence");
+  var headers = [
+    "Employee Code", "Employee Name", "System Role", "Designation", "Platform Mode",
+    "Live Presence Status", "Current Active Task", "Current Application", "Shift Hours Today",
+    "First Check-in (Manila)", "Device Timezone", "Last Active Heartbeat (Manila)", "Last Heartbeat (ISO)"
+  ];
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(headers);
+    formatHeaderRow(sh, headers.length);
+  }
+  var code = String(p.employeeCode || p.employee_code || "").trim().toUpperCase();
+  if (!code) code = normalizeEmployeeCodeKey_(p.userId || p.id || "");
+  if (!code) return { success: false, message: "Missing employeeCode for Live_Presence." };
+
+  var rawStatus = String(p.status || p.statusLabel || "").toLowerCase();
+  var explicitOffline = p.isOnline === false || p.isOnline === "false" || rawStatus.indexOf("offline") >= 0;
+  var isTracking = p.isTracking === true || String(p.isTracking).toLowerCase() === "true";
+  var isPaused = p.isPaused === true || String(p.isPaused).toLowerCase() === "true";
+  var presenceStatus = explicitOffline ? "Offline" : (isTracking ? (isPaused ? "Paused" : "Tracking Active") : "Online Standby");
+  var iso = String(p.lastHeartbeat || p.lastHeartbeatISO || new Date().toISOString()).trim();
+  var stamp = new Date(iso);
+  if (isNaN(stamp.getTime())) { stamp = new Date(); iso = stamp.toISOString(); }
+  var name = String(p.userName || p.employeeName || p.name || "Employee").trim();
+  var role = String(p.userRole || p.role || "agent").trim();
+  var designation = String(p.designation || "Agent").trim();
+  var platform = String(p.platformMode || p.loginPlatform || "").trim();
+  if (!platform || platform === "software") platform = "Desktop Tracker";
+  else if (platform === "webapp") platform = "Web Portal";
+  var task = explicitOffline ? "Idle" : String(p.currentTask || p.task || "Idle").trim();
+  var app = explicitOffline ? "None / Offline" : String(p.currentApp || p.currentApplication || "").trim();
+  var shiftToday = String(p.totalTodayFormatted || p.shiftHoursToday || formatSummaryDuration_(p.elapsedSeconds || 0)).trim();
+  var firstCheckin = String(p.firstCheckin || p.firstCheckIn || "").trim();
+  var timezone = String(p.timezone || p.deviceTimezone || "Asia/Manila").trim();
+  var row = [
+    code, name, role, designation, platform, presenceStatus, task, app, shiftToday,
+    firstCheckin, timezone, Utilities.formatDate(stamp, TZ, "yyyy-MM-dd HH:mm:ss"), iso
+  ];
+
+  var target = -1;
+  var last = sh.getLastRow();
+  var existingFirstCheckin = "";
+  if (last > 1) {
+    var codes = sh.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < codes.length; i++) {
+      if (String(codes[i][0] || "").trim().toUpperCase() === code) {
+        target = i + 2;
+        existingFirstCheckin = String(sh.getRange(target, 10).getValue() || "").trim();
+        break;
+      }
+    }
+  }
+
+  // Preserve original first check-in timestamp when updating existing employee
+  if (existingFirstCheckin) {
+    firstCheckin = existingFirstCheckin;
+    row[9] = firstCheckin;
+  }
+
+  if (target > 0) sh.getRange(target, 1, 1, headers.length).setValues([row]);
+  else sh.appendRow(row);
+
+  // Guarantee Daily_Summary row exists even before any time logs are saved
+  var todayManila = Utilities.formatDate(stamp, TZ, "yyyy-MM-dd");
+  rebuildDailySummaryRow_(ss, todayManila, code, { name: name, designation: designation, firstCheckin: firstCheckin });
+
+  return { success: true, employeeCode: code, status: presenceStatus };
+}
+
+function rebuildWeeklyMonthlySummaries_(ss) {
+  var sh = ss.getSheetByName("Time_Logs");
+  var records = [];
+  if (sh && sh.getLastRow() > 1) {
+    var data = sh.getRange(2, 1, sh.getLastRow() - 1, 16).getValues();
+    data.forEach(function(r) {
+      var id = String(r[0] || "").trim();
+      var code = String(r[1] || "").trim().toUpperCase();
+      var date = normalizeLogDate_(r[5]);
+      if (!id || id.toLowerCase().indexOf("live-") === 0 || !code || !date) return;
+      var seconds = Math.max(0, Math.min(Number(r[8]) || 0, MAX_SESSION_SECONDS));
+      var idle = Math.max(0, Number(r[10]) || 0);
+      var activityVals = [r[11], r[12]].map(function(v) { return Number(v); }).filter(function(v) { return isFinite(v); });
+      var activity = activityVals.length ? activityVals.reduce(function(a, b) { return a + b; }, 0) / activityVals.length : null;
+      var dateObj = new Date(date + "T12:00:00+08:00");
+      var utcDay = new Date(Date.UTC(dateObj.getUTCFullYear(), dateObj.getUTCMonth(), dateObj.getUTCDate()));
+      var dayOfWeek = utcDay.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      utcDay.setUTCDate(utcDay.getUTCDate() - dayOfWeek); // Distance back to Sunday
+      var weekStart = Utilities.formatDate(utcDay, TZ, "yyyy-MM-dd");
+      utcDay.setUTCDate(utcDay.getUTCDate() + 6); // Distance forward to Saturday
+      var weekEnd = Utilities.formatDate(utcDay, TZ, "yyyy-MM-dd");
+      records.push({
+        employeeCode: code,
+        name: String(r[2] || "").trim(),
+        designation: String(r[4] || "Agent").trim(),
+        date: date,
+        week: weekStart + " to " + weekEnd,
+        month: date.slice(0, 7),
+        task: String(r[14] || "Work").trim(),
+        seconds: seconds,
+        idleMinutes: idle,
+        activity: activity
+      });
+    });
+  }
+
+  var weekly = {}, monthly = {};
+  function accumulate(map, key, rec) {
+    if (!map[key]) map[key] = { period: key.split("|")[0], code: rec.employeeCode, name: rec.name, designation: rec.designation, tasks: {}, days: {}, seconds: 0, idleMinutes: 0, activitySum: 0, activityCount: 0 };
+    var g = map[key];
+    g.name = g.name || rec.name;
+    g.designation = g.designation || rec.designation;
+    g.tasks[rec.task] = true;
+    g.days[rec.date] = true;
+    g.seconds += rec.seconds;
+    g.idleMinutes += rec.idleMinutes;
+    if (rec.activity !== null) { g.activitySum += rec.activity; g.activityCount++; }
+  }
+  records.forEach(function(r) {
+    accumulate(weekly, r.week + "|" + r.employeeCode, r);
+    accumulate(monthly, r.month + "|" + r.employeeCode, r);
+  });
+  function round2(n) { return Math.round(n * 100) / 100; }
+  function writeDerived(tabName, headers, groups, isWeekly) {
+    var target = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
+    if (target.getLastRow() === 0) { target.appendRow(headers); formatHeaderRow(target, headers.length); }
+    if (target.getLastRow() > 1) target.getRange(2, 1, target.getLastRow() - 1, Math.max(target.getLastColumn(), headers.length)).clearContent();
+    var keys = Object.keys(groups).sort();
+    var rows = keys.map(function(k) {
+      var g = groups[k];
+      var hours = g.seconds / 3600;
+      var idleHours = g.idleMinutes / 60;
+      var averageActivity = g.activityCount ? round2(g.activitySum / g.activityCount) : "";
+      if (isWeekly) {
+        return [g.period, g.code, g.name, g.designation, Object.keys(g.tasks).sort().join(", "), Object.keys(g.days).length,
+          round2(hours), round2(idleHours), round2(Math.max(0, hours - idleHours)), "", "", averageActivity];
+      }
+      return [g.period, g.code, g.name, g.designation, Object.keys(g.tasks).sort().join(", "), Object.keys(g.days).length,
+        round2(hours), round2(idleHours), round2(Math.max(0, hours - idleHours)), averageActivity];
+    });
+    if (rows.length) target.getRange(2, 1, rows.length, headers.length).setValues(rows);
+    if (target.getLastRow() > 1) {
+      var count = target.getLastRow() - 1;
+      target.getRange(2, headers.length, count, 1).setNumberFormat('0"%"');
+    }
+  }
+  writeDerived("Weekly_Summary", ["Week Period (Sun-Sat)", "Employee Code", "Employee Name", "Designation", "Tasks Breakdown", "Days Rendered", "Gross Tracked Hours", "Total Idle / Breaks", "Net Productive Work", "Regular Hours", "Overtime Hours", "Avg Activity %"], weekly, true);
+  writeDerived("Monthly_Summary", ["Month Period", "Employee Code", "Employee Name", "Designation", "Primary Tasks", "Total Days Rendered", "Gross Tracked Hours", "Total Idle / Breaks", "Net Productive Work", "Avg Activity %"], monthly, false);
+}
+
+function refreshStalePresenceRows_(ss) {
+  var sh = ss.getSheetByName("Live_Presence");
+  if (!sh || sh.getLastRow() <= 1) return;
+  var now = Date.now();
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, 13).getValues();
+  for (var i = 0; i < rows.length; i++) {
+    var status = String(rows[i][5] || "").toLowerCase();
+    if (!status || status === "offline") continue;
+    var hb = String(rows[i][12] || rows[i][11] || "").trim();
+    var ms = Date.parse(hb);
+    if (!isNaN(ms) && now - ms <= 180000) continue;
+    var rowNo = i + 2;
+    sh.getRange(rowNo, 6, 1, 3).setValues([["Offline", "Idle", "None / Offline"]]);
+  }
+}
+
+function handlePost_(e) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var expectedSecret = (props.getProperty("LLCTRACKERV2_SHARED_SECRET") || "").trim();
+
+    if (!expectedSecret) {
+      return jsonResponse({
+        status: "ERROR",
+        code: "UNCONFIGURED_SHARED_SECRET",
+        message: "LLCTRACKERV2_SHARED_SECRET Script Property is not configured in Apps Script."
+      });
+    }
+
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResponse({
+        status: "ERROR",
+        code: "EMPTY_PAYLOAD",
+        message: "Empty post body payload."
+      });
+    }
+
+    var data;
+    try {
+      data = JSON.parse(e.postData.contents);
+    } catch (parseErr) {
+      return jsonResponse({
+        status: "ERROR",
+        code: "INVALID_JSON",
+        message: "Malformed JSON payload in request body."
+      });
+    }
+
+    var providedSecret = String(data.secret || data.sharedSecret || (e.parameter && e.parameter.secret) || "").trim();
+    if (!providedSecret || providedSecret !== expectedSecret) {
+      return jsonResponse({
+        status: "ERROR",
+        code: "UNAUTHORIZED",
+        message: "Unauthorized: Invalid or missing shared secret."
+      });
+    }
+
+    var ss = getLLCTRACKERV2Spreadsheet();
+    var action = String(data.action || "").toUpperCase().trim();
+
+    if (action === "AUTH_LOGIN" || action === "VERIFY_CREDENTIALS") {
+      var query = String(data.usernameOrCode || data.username || data.user || "").trim();
+      var inputPassword = String(data.password || "");
+
+      if (!query || !inputPassword) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "MISSING_CREDENTIALS",
+          message: "Username/Code and password are required."
+        });
+      }
+
+      var empSheet = ss.getSheetByName("Employee_Directory");
+      if (!empSheet || empSheet.getLastRow() <= 1) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "USER_NOT_FOUND",
+          message: "Employee_Directory is empty or uninitialized."
+        });
+      }
+
+      var cols = getEmployeeDirectoryCols(empSheet);
+      var maxCols = cols.totalCols;
+      var lastRow = empSheet.getLastRow();
+      var rows = empSheet.getRange(2, 1, lastRow - 1, maxCols).getValues();
+
+      var cleanQuery = query.toLowerCase().replace(/^@/, "").trim();
+      var foundRowIdx = -1;
+      var foundEmp = null;
+
+      for (var r = 0; r < rows.length; r++) {
+        var row = rows[r];
+        var rCode = String(row[cols.codeCol - 1] || "").trim().toUpperCase();
+        var rUser = String(row[cols.userCol - 1] || "").trim().toLowerCase();
+        var queryAsCode = normalizeEmployeeCodeKey_(query);
+
+        if (rUser === cleanQuery || rCode === cleanQuery.toUpperCase() || rCode === queryAsCode) {
+          foundRowIdx = r + 2;
+          foundEmp = row;
+          break;
+        }
+      }
+
+      if (foundRowIdx === -1 || !foundEmp) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "USER_NOT_FOUND",
+          message: "Account not found for \"" + query + "\"."
+        });
+      }
+
+      var empStatus = String(foundEmp[cols.statusCol - 1] || "active").toLowerCase().trim();
+      if (empStatus === "inactive") {
+        return jsonResponse({
+          status: "ERROR",
+          code: "USER_INACTIVE",
+          message: "Account is inactive."
+        });
+      }
+
+      var rawMustChange = foundEmp[cols.mustChangeCol - 1];
+      var mustChange = (typeof rawMustChange === "boolean")
+        ? rawMustChange
+        : (String(rawMustChange).toUpperCase() === "TRUE" || String(rawMustChange).toUpperCase() === "YES");
+
+      var storedPassword = String(foundEmp[cols.pwCol - 1] || "").trim();
+      if (!storedPassword) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "PASSWORD_NOT_SET",
+          message: "No password is stored for this account. Ask an administrator to set a temporary password."
+        });
+      }
+
+      var isMatch = (inputPassword === storedPassword);
+
+      if (!isMatch) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "INVALID_CREDENTIALS",
+          message: "Incorrect password."
+        });
+      }
+
+      var userPayload = {
+        id: String(foundEmp[cols.codeCol - 1] || "").trim(),
+        employeeCode: String(foundEmp[cols.codeCol - 1] || "").trim(),
+        username: String(foundEmp[cols.userCol - 1] || "").trim(),
+        name: String(foundEmp[cols.nameCol - 1] || "").trim(),
+        email: String(foundEmp[cols.emailCol - 1] || "").trim(),
+        role: String(foundEmp[cols.roleCol - 1] || "agent").trim(),
+        designation: String(foundEmp[cols.desigCol - 1] || "Agent").trim(),
+        status: empStatus,
+        joinDate: asText_(foundEmp[cols.hiredCol - 1], "date"),
+        monthlyRate: Number(foundEmp[cols.monthlyCol - 1] || 0),
+        hourlyRate: Number(foundEmp[cols.hourlyCol - 1] || 0),
+        teamLeaderId: String(foundEmp[cols.tlCol - 1] || "").trim(),
+        screenshotMonitored: String(foundEmp[cols.scrCol - 1]).toUpperCase() === "YES",
+        activityMonitored: String(foundEmp[cols.actCol - 1]).toUpperCase() === "YES",
+        mustChangePassword: mustChange,
+        isPasswordChanged: mustChange ? "NO" : "YES"
+      };
+
+      upsertLivePresenceRow_(ss, {
+        employeeCode: userPayload.employeeCode,
+        userId: userPayload.id,
+        userName: userPayload.name,
+        userRole: userPayload.role,
+        designation: userPayload.designation,
+        platformMode: data.platformMode || data.loginPlatform || (data.mode === "software" ? "Desktop Tracker" : "Web Portal"),
+        isOnline: true,
+        isTracking: false,
+        currentTask: "Idle",
+        currentApp: data.mode === "software" ? "LLC Desktop Tracker" : "Web Portal",
+        firstCheckin: new Date().toISOString(),
+        timezone: data.timezone || "Asia/Manila",
+        lastHeartbeat: new Date().toISOString()
+      });
+
+      return jsonResponse({
+        status: "SUCCESS",
+        valid: true,
+        mustChangePassword: mustChange,
+        user: userPayload
+      });
+    }
+
+    if (action === "UPDATE_PASSWORD") {
+      var targetUserId = String(data.userId || "").trim();
+      var targetEmpCode = String(data.employeeCode || "").trim().toUpperCase();
+      var targetUsername = String(data.username || "").trim().toLowerCase();
+      var targetCodeFromId = normalizeEmployeeCodeKey_(targetUserId);
+      var newPlainPassword = String(data.newPassword || data.password || data.accountPassword || data.passwordHash || "").trim();
+
+      if (!newPlainPassword) {
+        return jsonResponse({ status: "ERROR", message: "Missing new password in update payload." });
+      }
+
+      var empSheet = ss.getSheetByName("Employee_Directory") || ss.insertSheet("Employee_Directory");
+      var cols = getEmployeeDirectoryCols(empSheet);
+      var lastRow = empSheet.getLastRow();
+      var rows = lastRow > 1 ? empSheet.getRange(2, 1, lastRow - 1, cols.totalCols).getValues() : [];
+
+      var foundRowIdx = -1;
+      for (var j = 0; j < rows.length; j++) {
+        var rCode = String(rows[j][cols.codeCol - 1] || "").trim().toUpperCase();
+        var rUser = String(rows[j][cols.userCol - 1] || "").trim().toLowerCase();
+
+        if (
+          (targetEmpCode && rCode === targetEmpCode) ||
+          (targetCodeFromId && rCode === targetCodeFromId) ||
+          (targetUserId && rUser === targetUserId.toLowerCase()) ||
+          (targetUsername && rUser === targetUsername)
+        ) {
+          foundRowIdx = j + 2;
+          break;
+        }
+      }
+
+      if (foundRowIdx === -1) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "USER_NOT_FOUND",
+          message: "Employee account not found in Employee_Directory for password update."
+        });
+      }
+
+      empSheet.getRange(foundRowIdx, cols.pwCol).setValue(newPlainPassword);
+      empSheet.getRange(foundRowIdx, cols.mustChangeCol).setValue(false);
+
+      SpreadsheetApp.flush();
+      var checkPw = String(empSheet.getRange(foundRowIdx, cols.pwCol).getValue() || "");
+      var checkMustRaw = empSheet.getRange(foundRowIdx, cols.mustChangeCol).getValue();
+      var checkMust = (checkMustRaw === false || String(checkMustRaw).trim().toLowerCase() === "false");
+      if (checkPw !== newPlainPassword || !checkMust) {
+        return jsonResponse({
+          status: "ERROR",
+          code: "PASSWORD_UPDATE_VERIFY_FAILED",
+          action: "UPDATE_PASSWORD",
+          message: "Password update was written but the saved password or mustChangePassword flag did not verify."
+        });
+      }
+
+      return jsonResponse({
+        status: "SUCCESS",
+        action: "UPDATE_PASSWORD",
+        userId: targetUserId,
+        message: "Password and mustChangePassword verified in Employee_Directory.",
+        verified: true
+      });
+    }
+
+    if (action === "ADMIN_RESET_PASSWORD") {
+      var rsUserId = String(data.userId || "").trim();
+      var rsEmpCode = String(data.employeeCode || "").trim().toUpperCase() || normalizeEmployeeCodeKey_(rsUserId);
+      var rsUsername = String(data.username || "").trim().toLowerCase() || rsUserId.toLowerCase();
+      var rsTemp = String(data.temporaryPassword || "").trim();
+
+      if ((!rsUserId && !rsEmpCode && !rsUsername) || !rsTemp) {
+        return jsonResponse({ status: "ERROR", message: "An employeeCode/username and temporaryPassword are required." });
+      }
+
+      var rsSheet = ss.getSheetByName("Employee_Directory");
+      if (!rsSheet) {
+        return jsonResponse({ status: "ERROR", code: "USER_NOT_FOUND", message: "Employee_Directory not found." });
+      }
+
+      var rsCols = getEmployeeDirectoryCols(rsSheet);
+      var rsLast = rsSheet.getLastRow();
+      if (rsLast > 1) {
+        var rsRows = rsSheet.getRange(2, 1, rsLast - 1, rsCols.totalCols).getValues();
+        for (var rsI = 0; rsI < rsRows.length; rsI++) {
+          var rsCode = String(rsRows[rsI][rsCols.codeCol - 1] || "").trim().toUpperCase();
+          var rsUser = String(rsRows[rsI][rsCols.userCol - 1] || "").trim().toLowerCase();
+          if ((rsEmpCode && rsCode === rsEmpCode) || (rsUsername && rsUser === rsUsername)) {
+            var rsRowNumber = rsI + 2;
+            rsSheet.getRange(rsRowNumber, rsCols.pwCol).setValue(rsTemp);
+            rsSheet.getRange(rsRowNumber, rsCols.mustChangeCol).setValue(true);
+            SpreadsheetApp.flush();
+            var savedTemp = String(rsSheet.getRange(rsRowNumber, rsCols.pwCol).getValue() || "");
+            var savedFlag = rsSheet.getRange(rsRowNumber, rsCols.mustChangeCol).getValue();
+            if (savedTemp !== rsTemp || !(savedFlag === true || String(savedFlag).toLowerCase() === "true")) {
+              return jsonResponse({ status: "ERROR", code: "PASSWORD_RESET_VERIFY_FAILED", message: "Temporary password reset did not verify in Employee_Directory." });
+            }
+            return jsonResponse({ status: "SUCCESS", action: "ADMIN_RESET_PASSWORD", employeeCode: rsCode, verified: true });
+          }
+        }
+      }
+      return jsonResponse({ status: "ERROR", code: "USER_NOT_FOUND", message: "Employee not found by Employee Code or username." });
+    }
+
+    if (action === "HEARTBEAT_UPDATE" || action === "SYNC_PRESENCE") {
+      var presenceList = [];
+      if (Array.isArray(data.presence)) presenceList = data.presence;
+      else if (data.presence && typeof data.presence === "object") presenceList = [data.presence];
+      else if (data.employeeCode || data.userId) presenceList = [data];
+
+      var results = [];
+      presenceList.forEach(function(p) {
+        results.push(upsertLivePresenceRow_(ss, p));
+      });
+      SpreadsheetApp.flush();
+      var failed = results.filter(function(r) { return !r.success; });
+      if (failed.length) return jsonResponse({ status: "ERROR", action: action, message: failed[0].message, count: presenceList.length });
+      return jsonResponse({ status: "SUCCESS", action: "HEARTBEAT_UPDATE", count: presenceList.length });
+    }
+
+    if (action === "SYNC_TIMELOGS" || action === "BATCH_TIMELOGS" || action === "SYNC_ALL") {
+      var logs = data.timeLogs || data.logs || (Array.isArray(data) ? data : []);
+      if (!Array.isArray(logs)) logs = logs ? [logs] : [];
+
+      var timeLogsSheet = ss.getSheetByName("Time_Logs") || ss.insertSheet("Time_Logs");
+
+      if (timeLogsSheet.getLastRow() === 0) {
+        timeLogsSheet.appendRow([
+          "Session ID", "Employee Code", "Employee Name", "Role", "Designation",
+          "Date (YYYY-MM-DD)", "Start Time", "End Time", "Duration (Seconds)", "Total Time",
+          "Idle Minutes", "Mouse %", "Keyboard %", "Status", "Task", "User ID"
+        ]);
+        formatHeaderRow(timeLogsSheet, 16);
+      }
+
+      forceTextColumns_(timeLogsSheet, 6, 3);
+      if (timeLogsSheet.getLastRow() > 1) timeLogsSheet.getRange(2, 12, timeLogsSheet.getLastRow() - 1, 2).setNumberFormat('0"%"');
+
+      var existingMap = {};
+      var existingDurations = {};
+      var affectedDailyKeys = {};
+      var mirrorRowsWritten = 0;
+
+      if (timeLogsSheet.getLastRow() > 1) {
+        var existingData = timeLogsSheet.getRange(2, 1, timeLogsSheet.getLastRow() - 1, 16).getValues();
+        for (var k = 0; k < existingData.length; k++) {
+          var idStr = String(existingData[k][0] || "").trim();
+          if (idStr) {
+            existingMap[idStr] = k + 2;
+            existingDurations[idStr] = Number(existingData[k][8] || 0);
+          }
+        }
+      }
+
+      for (var l = 0; l < logs.length; l++) {
+        var log = logs[l];
+        var sId = String(log.segmentId || log.id || log.sessionId || "").trim();
+        if (!sId) continue;
+        if (sId.toLowerCase().indexOf("live-") === 0) {
+          upsertLivePresenceRow_(ss, {
+            employeeCode: log.employeeCode,
+            userId: log.userId || log.employeeCode,
+            userName: log.userName || log.employeeName,
+            userRole: log.actorRole || log.role || "agent",
+            designation: log.designation || "Agent",
+            platformMode: "Desktop Tracker",
+            isOnline: true,
+            isTracking: true,
+            isPaused: false,
+            currentTask: log.task || "Work",
+            currentApp: log.currentApp || "LLC Desktop Tracker",
+            elapsedSeconds: log.durationSeconds,
+            firstCheckin: log.startTime || "",
+            timezone: log.timezone || "Asia/Manila",
+            lastHeartbeat: log.lastHeartbeat || new Date().toISOString()
+          });
+          continue;
+        }
+
+        var safeDuration = sanitizeDuration_(log.durationSeconds, log.startTime, log.endTime, existingDurations[sId]);
+        if (existingDurations[sId] && safeDuration === 0 && log.status === "completed") {
+          safeDuration = Math.min(existingDurations[sId], MAX_SESSION_SECONDS);
+        }
+
+        var lRow = [
+          sId,
+          String(log.employeeCode || "").trim(),
+          String(log.userName || log.employeeName || "").trim(),
+          String(log.actorRole || log.role || "agent").trim(),
+          String(log.designation || "Agent").trim(),
+          String(log.date || Utilities.formatDate(new Date(), "Asia/Manila", "yyyy-MM-dd")).trim(),
+          String(log.startTime || "").trim(),
+          String(log.endTime || "").trim(),
+          safeDuration,
+          (function() {
+            var supplied = String(log.totalTime || log.durationFormatted || "").trim();
+            return (!supplied || /^0(?:h\s*)?0m(?:\s*0s)?$/i.test(supplied)) ? formatDetailedDuration_(safeDuration) : supplied;
+          })(),
+          Number(log.idleMinutes || 0),
+          Number(log.mousePercentage !== undefined ? log.mousePercentage : (log.mouseActivityAvg !== undefined ? log.mouseActivityAvg : 95)),
+          Number(log.keyboardPercentage !== undefined ? log.keyboardPercentage : (log.keyboardActivityAvg !== undefined ? log.keyboardActivityAvg : 95)),
+          String(log.status || "completed").trim(),
+          String(log.task || "Work").trim(),
+          String(log.userId || "").trim()
+        ];
+
+        if (existingMap[sId]) {
+          timeLogsSheet.getRange(existingMap[sId], 1, 1, 16).setValues([lRow]);
+        } else {
+          timeLogsSheet.appendRow(lRow);
+          existingMap[sId] = timeLogsSheet.getLastRow();
+          existingDurations[sId] = safeDuration;
+        }
+
+        /*var mirrorRow = [
+          sId, lRow[1], lRow[2], lRow[4], lRow[14], lRow[5], lRow[6], lRow[7],
+          lRow[8], lRow[9], lRow[10], lRow[11], lRow[12], lRow[13], String(log.notes || "").trim()
+        ];
+        upsertTimeMirrorRow_(ss, "Timesheets", mirrorRow);
+        upsertTimeMirrorRow_(ss, "Detailed_Time_Logs", mirrorRow); */
+        mirrorRowsWritten++;
+        var cleanDate = normalizeLogDate_(lRow[5]);
+        var cleanCode = String(lRow[1] || "").trim();
+        if (cleanDate && cleanCode) affectedDailyKeys[cleanDate + "|" + cleanCode.toUpperCase()] = { date: cleanDate, employeeCode: cleanCode };
+      }
+
+      Object.keys(affectedDailyKeys).forEach(function(key) {
+        var item = affectedDailyKeys[key];
+        rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
+      });
+      //rebuildWeeklyMonthlySummaries_(ss);
+      SpreadsheetApp.flush();
+
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        received: logs.length,
+        timeLogsPersisted: mirrorRowsWritten,
+        //sheetsUpdated: ["Time_Logs", "Timesheets", "Detailed_Time_Logs", "Daily_Summary", "Weekly_Summary", "Monthly_Summary"]
+        sheetsUpdated: ["Time_Logs", "Daily_Summary"]
+      });
+    }
+
+    if (action === "SYNC_USERS" || action === "SYNC_EMPLOYEES" || action === "ADD_EMPLOYEE" || action === "UPDATE_EMPLOYEE") {
+      var users = data.users || data.employees || (data.user ? [data.user] : (data.employee ? [data.employee] : ((data.employeeCode || data.username || data.name || data.fullName) ? [data] : [])));
+      if (!Array.isArray(users)) users = [users];
+      if (!users.length) {
+        return jsonResponse({ status: "ERROR", action: action, code: "MISSING_EMPLOYEE_PAYLOAD", message: "UPDATE_EMPLOYEE requires an employee object, user object, or employee fields in the request body." });
+      }
+
+      var empSheet = ss.getSheetByName("Employee_Directory") || ss.insertSheet("Employee_Directory");
+      var cols = getEmployeeDirectoryCols(empSheet);
+
+      var existingEmpMap = {};
+      if (empSheet.getLastRow() > 1) {
+        var eData = empSheet.getRange(2, 1, empSheet.getLastRow() - 1, cols.totalCols).getValues();
+        for (var m = 0; m < eData.length; m++) {
+          var codeStr = String(eData[m][cols.codeCol - 1] || "").trim().toUpperCase();
+          var uStr = String(eData[m][cols.userCol - 1] || "").trim().toLowerCase();
+          var rowNum = m + 2;
+          if (codeStr) existingEmpMap[codeStr] = rowNum;
+          if (uStr) existingEmpMap[uStr] = rowNum;
+        }
+      }
+
+      for (var n = 0; n < users.length; n++) {
+        var u = users[n];
+        var eCode = String(u.employeeCode || "").trim().toUpperCase();
+        var uId = String(u.id || "").trim();
+        var legacyIdAsCode = normalizeEmployeeCodeKey_(uId);
+        var uName = String(u.username || "").trim().toLowerCase();
+
+        var targetRow = (eCode && existingEmpMap[eCode]) || (legacyIdAsCode && existingEmpMap[legacyIdAsCode]) || (uName && existingEmpMap[uName]) || -1;
+
+        if (targetRow !== -1) {
+          if (eCode) empSheet.getRange(targetRow, cols.codeCol).setValue(eCode);
+          if (uName) empSheet.getRange(targetRow, cols.userCol).setValue(uName);
+          if (u.name !== undefined && String(u.name).trim()) empSheet.getRange(targetRow, cols.nameCol).setValue(String(u.name).trim());
+          if (u.email !== undefined) empSheet.getRange(targetRow, cols.emailCol).setValue(String(u.email || "").trim());
+          if (u.role !== undefined && String(u.role).trim()) empSheet.getRange(targetRow, cols.roleCol).setValue(String(u.role).trim());
+          if (u.designation !== undefined && String(u.designation).trim()) empSheet.getRange(targetRow, cols.desigCol).setValue(String(u.designation).trim());
+          if (u.joinDate) empSheet.getRange(targetRow, cols.hiredCol).setValue(String(u.joinDate).trim());
+          if (u.monthlyRate !== undefined) empSheet.getRange(targetRow, cols.monthlyCol).setValue(Number(u.monthlyRate || 0));
+          if (u.hourlyRate !== undefined) empSheet.getRange(targetRow, cols.hourlyCol).setValue(Number(u.hourlyRate || 0));
+          if (u.teamLeaderId !== undefined) empSheet.getRange(targetRow, cols.tlCol).setValue(String(u.teamLeaderId || "").trim());
+          if (u.screenshotMonitored !== undefined) empSheet.getRange(targetRow, cols.scrCol).setValue(u.screenshotMonitored ? "YES" : "NO");
+          if (u.activityMonitored !== undefined) empSheet.getRange(targetRow, cols.actCol).setValue(u.activityMonitored ? "YES" : "NO");
+          if (u.status !== undefined) empSheet.getRange(targetRow, cols.statusCol).setValue(String(u.status || "active").trim());
+        } else {
+          var newRowArray = new Array(cols.totalCols);
+          for (var c = 0; c < cols.totalCols; c++) newRowArray[c] = "";
+
+          newRowArray[cols.codeCol - 1] = eCode || "N/A";
+          newRowArray[cols.userCol - 1] = String(u.username || "").trim().toLowerCase();
+          newRowArray[cols.nameCol - 1] = String(u.name || "").trim();
+          newRowArray[cols.emailCol - 1] = String(u.email || "").trim();
+          newRowArray[cols.roleCol - 1] = String(u.role || "agent").trim();
+          newRowArray[cols.desigCol - 1] = String(u.designation || "Agent").trim();
+          newRowArray[cols.hiredCol - 1] = String(u.joinDate || "2024-01-01").trim();
+          newRowArray[cols.monthlyCol - 1] = Number(u.monthlyRate || 0);
+          newRowArray[cols.hourlyRate - 1] = Number(u.hourlyRate || 0);
+          newRowArray[cols.tlCol - 1] = String(u.teamLeaderId || "").trim();
+          newRowArray[cols.scrCol - 1] = u.screenshotMonitored ? "YES" : "NO";
+          newRowArray[cols.actCol - 1] = u.activityMonitored ? "YES" : "NO";
+          newRowArray[cols.statusCol - 1] = String(u.status || "active").trim();
+          newRowArray[cols.maskedPwCol - 1] = "********";
+          newRowArray[cols.pwCol - 1] = String(u.accountPassword || u.password || "Password123!").trim();
+          newRowArray[cols.mustChangeCol - 1] = (u.mustChangePassword !== undefined) ? Boolean(u.mustChangePassword) : true;
+
+          empSheet.appendRow(newRowArray);
+          var newEmpRow = empSheet.getLastRow();
+          if (eCode) existingEmpMap[eCode] = newEmpRow;
+          if (uName) existingEmpMap[uName] = newEmpRow;
+        }
+      }
+
+      SpreadsheetApp.flush();
+      return jsonResponse({ status: "SUCCESS", action: action, count: users.length });
+    }
+
+    if (action === "SYNC_ATTENDANCE" || action === "RECORD_ATTENDANCE") {
+      var attendances = data.attendance || (Array.isArray(data) ? data : []);
+      if (!Array.isArray(attendances) && typeof attendances === "object") {
+        attendances = [attendances];
+      }
+
+      var attSheet = ss.getSheetByName("Daily_Attendance") || ss.insertSheet("Daily_Attendance");
+      if (attSheet.getLastRow() === 0) {
+        attSheet.appendRow(["Log ID", "Date", "User ID", "Employee Code", "Employee Name", "Role", "First Check-in", "Last Check-out", "Total Duration", "Shift Status"]);
+        formatHeaderRow(attSheet, 10);
+      }
+      forceTextColumns_(attSheet, 2, 1);
+      forceTextColumns_(attSheet, 7, 2);
+
+      var attMap = {};
+      if (attSheet.getLastRow() > 1) {
+        var attData = attSheet.getRange(2, 1, attSheet.getLastRow() - 1, 3).getValues();
+        for (var ai = 0; ai < attData.length; ai++) {
+          var logId = String(attData[ai][0] || "").trim();
+          var dt = asText_(attData[ai][1], "date");
+          var usr = String(attData[ai][2] || "").trim();
+          if (logId) attMap[logId] = ai + 2;
+          if (usr && dt) attMap[usr + "_" + dt] = ai + 2;
+        }
+      }
+
+      for (var aj = 0; aj < attendances.length; aj++) {
+        var a = attendances[aj];
+        var aId = String(a.id || a.logId || "").trim();
+        var aUser = String(a.userId || "").trim();
+        var aDate = String(a.date || Utilities.formatDate(new Date(), "Asia/Manila", "yyyy-MM-dd")).trim();
+        var attRowIdx = (aId && attMap[aId]) || (aUser && aDate && attMap[aUser + "_" + aDate]) || -1;
+
+        var aRow = [
+          aId || ("ATT-" + aUser + "-" + aDate),
+          aDate,
+          aUser,
+          String(a.employeeCode || "").trim(),
+          String(a.name || a.employeeName || "").trim(),
+          String(a.role || "agent").trim(),
+          String(a.firstCheckin || a.firstCheckIn || "").trim(),
+          String(a.lastCheckout || a.lastCheckOut || "").trim(),
+          String(a.totalDuration || a.durationFormatted || "").trim(),
+          String(a.shiftStatus || a.status || "Completed").trim()
+        ];
+
+        if (attRowIdx !== -1) {
+          attSheet.getRange(attRowIdx, 1, 1, 10).setValues([aRow]);
+        } else {
+          attSheet.appendRow(aRow);
+          var newAttRow = attSheet.getLastRow();
+          if (aId) attMap[aId] = newAttRow;
+          if (aUser && aDate) attMap[aUser + "_" + aDate] = newAttRow;
+        }
+      }
+
+      return jsonResponse({ status: "SUCCESS", action: "SYNC_ATTENDANCE", count: attendances.length });
+    }
+
+    if (action === "LOG_AUDIT" || action === "SYNC_AUDITLOGS") {
+      var auditList = data.logs || data.auditlogs || (data.log ? [data.log] : []);
+      var auditSheet = ss.getSheetByName("Audit_Logs") || ss.insertSheet("Audit_Logs");
+      if (auditSheet.getLastRow() === 0) {
+        auditSheet.appendRow(["Log ID", "Timestamp (ISO)", "Category", "Actor ID", "Actor Name", "Actor Role", "Action Details", "IP / Device"]);
+        formatHeaderRow(auditSheet, 8);
+      }
+
+      for (var al = 0; al < auditList.length; al++) {
+        var aud = auditList[al];
+        auditSheet.appendRow([
+          aud.id || ("AUD-" + Date.now()),
+          aud.timestamp || new Date().toISOString(),
+          aud.category || "GENERAL",
+          aud.actorId || "",
+          aud.actorName || "",
+          aud.actorRole || "",
+          aud.actionDetails || aud.action || "",
+          aud.ip || aud.device || ""
+        ]);
+      }
+
+      return jsonResponse({ status: "SUCCESS", action: "LOG_AUDIT", count: auditList.length });
+    }
+
+    if (action === "GET_ALL" || action === "READ_ALL") {
+      refreshStalePresenceRows_(ss);
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        employees: readEmployees(ss, false),
+        timeLogs: readTimeLogs(ss, data),
+        presence: readPresence(ss),
+        attendance: readAttendance(ss)
+      });
+    }
+
+    if (action === "GET_AUTH_EMPLOYEES") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: "GET_AUTH_EMPLOYEES",
+        employees: readEmployees(ss, true)
+      });
+    }
+
+    if (action === "GET_EMPLOYEES") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: "GET_EMPLOYEES",
+        employees: readEmployees(ss, false)
+      });
+    }
+
+    if (action === "GET_TIMELOGS") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: "GET_TIMELOGS",
+        timeLogs: readTimeLogs(ss, data)
+      });
+    }
+
+    if (action === "GET_PRESENCE") {
+      refreshStalePresenceRows_(ss);
+      return jsonResponse({
+        status: "SUCCESS",
+        action: "GET_PRESENCE",
+        presence: readPresence(ss)
+      });
+    }
+
+    if (action === "GET_ATTENDANCE") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: "GET_ATTENDANCE",
+        attendance: readAttendance(ss)
+      });
+    }
+
+    if (action === "GET_DAILY_SUMMARY") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        summaries: readDailySummaries(ss, data)
+      });
+    }
+
+    if (action === "ENSURE_DAILY_SUMMARY") {
+      var workDate = normalizeLogDate_(data.date || new Date());
+      var empCode = String(data.employeeCode || data.userId || "").trim().toUpperCase();
+      if (empCode) {
+        rebuildDailySummaryRow_(ss, workDate, empCode, {
+          name: String(data.userName || data.name || "").trim(),
+          designation: String(data.designation || "Agent").trim(),
+          firstCheckin: String(data.firstCheckin || "").trim()
+        });
+        SpreadsheetApp.flush();
+      }
+      return jsonResponse({ status: "SUCCESS", action: action, employeeCode: empCode, date: workDate });
+    }
+
+    if (action === "GET_WEEKLY_SUMMARY") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        weeklySummaries: readWeeklySummaries(ss, data)
+      });
+    }
+
+    if (action === "GET_MONTHLY_SUMMARY") {
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        monthlySummaries: readMonthlySummaries(ss, data)
+      });
+    }
+
+    return jsonResponse({ status: "ERROR", code: "UNKNOWN_ACTION", message: "Unknown action: " + action });
+  } catch (err) {
+    return jsonResponse({ status: "ERROR", error: err.message || err.toString() });
+  }
+}
+
+function readEmployees(ss, includeAuthCredentials) {
+  var empSheet = ss.getSheetByName("Employee_Directory");
+  if (!empSheet || empSheet.getLastRow() <= 1) return [];
+
+  var cols = getEmployeeDirectoryCols(empSheet);
+  var maxCols = cols.totalCols;
+  var eValues = empSheet.getRange(2, 1, empSheet.getLastRow() - 1, maxCols).getValues();
+
+  return eValues.map(function(r) {
+    var rawMustChange = r[cols.mustChangeCol - 1];
+    var mustChange = (typeof rawMustChange === "boolean")
+      ? rawMustChange
+      : (String(rawMustChange).toUpperCase() === "TRUE" || String(rawMustChange).toUpperCase() === "YES");
+
+    var emp = {
+      employeeCode: String(r[cols.codeCol - 1] || "").trim(),
+      username: String(r[cols.userCol - 1] || "").trim(),
+      name: String(r[cols.nameCol - 1] || "").trim(),
+      email: String(r[cols.emailCol - 1] || "").trim(),
+      role: String(r[cols.roleCol - 1] || "agent").trim(),
+      designation: String(r[cols.desigCol - 1] || "Agent").trim(),
+      joinDate: asText_(r[cols.hiredCol - 1], "date"),
+      monthlyRate: Number(r[cols.monthlyCol - 1] || 0),
+      hourlyRate: Number(r[cols.hourlyCol - 1] || 0),
+      teamLeaderId: String(r[cols.tlCol - 1] || "").trim(),
+      screenshotMonitored: String(r[cols.scrCol - 1]).toUpperCase() === "YES",
+      activityMonitored: String(r[cols.actCol - 1]).toUpperCase() === "YES",
+      status: String(r[cols.statusCol - 1] || "active").trim(),
+      id: String(r[cols.codeCol - 1] || "").trim(),
+      mustChangePassword: mustChange,
+      isPasswordChanged: mustChange ? "NO" : "YES"
+    };
+
+    if (includeAuthCredentials) {
+      emp.accountPassword = String(r[cols.pwCol - 1] || "").trim();
+    }
+
+    return emp;
+  });
+}
+
+function readTimeLogs(ss, opts) {
+  var logSheet = ss.getSheetByName("Time_Logs");
+  if (!logSheet || logSheet.getLastRow() <= 1) return [];
+  opts = opts || {};
+  var days = Number(opts.days) || 45;
+  var since = opts.since
+    ? String(opts.since)
+    : Utilities.formatDate(new Date(Date.now() - days * 86400000), TZ, "yyyy-MM-dd");
+  var wantUser = String(opts.userId || "").trim();
+
+  var values = logSheet.getRange(2, 1, logSheet.getLastRow() - 1, 16).getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    var r = values[i];
+    var date = asText_(r[5], "date");
+    if (date && date < since) continue;
+
+    if (wantUser) {
+      var storedUserKey = String(r[15] || "").trim();
+      var rowEmployeeCode = String(r[1] || "").trim();
+      var canonicalWanted = normalizeEmployeeCodeKey_(wantUser);
+      if (storedUserKey !== wantUser && rowEmployeeCode.toUpperCase() !== canonicalWanted && normalizeEmployeeCodeKey_(storedUserKey) !== canonicalWanted) continue;
+    }
+
+    out.push({
+      id: String(r[0] || "").trim(),
+      sessionId: String(r[0] || "").trim(),
+      employeeCode: String(r[1] || "").trim(),
+      userName: String(r[2] || "").trim(),
+      role: String(r[3] || "").trim(),
+      designation: String(r[4] || "").trim(),
+      date: date,
+      startTime: asText_(r[6]),
+      endTime: asText_(r[7]),
+      durationSeconds: Math.min(Number(r[8] || 0), MAX_SESSION_SECONDS),
+      totalTime: String(r[9] || "").trim(),
+      idleMinutes: Number(r[10] || 0),
+      mousePercentage: Number(r[11] || 95),
+      keyboardPercentage: Number(r[12] || 95),
+      status: String(r[13] || "completed").trim(),
+      task: String(r[14] || "").trim(),
+      userId: String(r[15] || "").trim()
+    });
+  }
+  return out;
+}
+
+function readPresence(ss) {
+  var presSheet = ss.getSheetByName("Live_Presence");
+  if (!presSheet || presSheet.getLastRow() <= 1) return [];
+  var pValues = presSheet.getRange(2, 1, presSheet.getLastRow() - 1, 13).getValues();
+  return pValues.map(function(r) {
+    var code = String(r[0] || "").trim();
+    return {
+      employeeCode: code,
+      userName: String(r[1] || "").trim(),
+      userRole: String(r[2] || "").trim(),
+      role: String(r[2] || "").trim(),
+      designation: String(r[3] || "").trim(),
+      loginPlatform: String(r[4] || "").trim(),
+      platformMode: String(r[4] || "").trim(),
+      status: String(r[5] || "").trim(),
+      currentTask: String(r[6] || "").trim(),
+      currentApp: String(r[7] || "").trim(),
+      elapsedTimeFormatted: String(r[8] || "").trim(),
+      totalTodayFormatted: String(r[8] || "").trim(),
+      firstCheckin: asText_(r[9]),
+      timezone: String(r[10] || "").trim(),
+      lastHeartbeat: asText_(r[12]),
+      userId: code
+    };
+  });
+}
+
+function readAttendance(ss) {
+  var attSheet = ss.getSheetByName("Daily_Attendance");
+  if (!attSheet || attSheet.getLastRow() <= 1) return [];
+
+  var aValues = attSheet.getRange(2, 1, attSheet.getLastRow() - 1, 10).getValues();
+  return aValues.map(function(r) {
+    return {
+      id: String(r[0] || "").trim(),
+      date: asText_(r[1], "date"),
+      userId: String(r[2] || "").trim(),
+      employeeCode: String(r[3] || "").trim(),
+      name: String(r[4] || "").trim(),
+      role: String(r[5] || "").trim(),
+      firstCheckin: asText_(r[6]),
+      lastCheckout: asText_(r[7]),
+      totalDuration: String(r[8] || "").trim(),
+      shiftStatus: String(r[9] || "").trim()
+    };
+  });
+}
+
+function readDailySummaries(ss, opts) {
+  var sheet = ss.getSheetByName("Daily_Summary");
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  opts = opts || {};
+  var filterDate = opts.date ? String(opts.date).trim() : "";
+  var filterUser = opts.userId ? normalizeEmployeeCodeKey_(opts.userId) : "";
+
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 14).getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    var r = values[i];
+    var rowDate = asText_(r[0], "date");
+    var rowCode = String(r[1] || "").trim().toUpperCase();
+
+    if (filterDate && rowDate !== filterDate) continue;
+    if (filterUser && rowCode !== filterUser) continue;
+
+    out.push({
+      date: rowDate,
+      employeeCode: rowCode,
+      employeeName: String(r[2] || "").trim(),
+      designation: String(r[3] || "").trim(),
+      tasksWorkedOn: String(r[4] || "").trim(),
+      firstClockIn: asText_(r[5]),
+      lastClockOut: asText_(r[6]),
+      grossTrackedShift: String(r[7] || "").trim(),
+      totalIdleBreaks: String(r[8] || "").trim(),
+      netProductiveWork: String(r[9] || "").trim(),
+      grossSeconds: Number(r[10] || 0),
+      durationSeconds: Number(r[10] || 0),
+      avgActivity: String(r[11] || "0%"),
+      shiftStatus: String(r[12] || "").trim(),
+      logEntries: Number(r[13] || 0)
+    });
+  }
+  return out;
+}
+
+function readWeeklySummaries(ss, opts) {
+  var sheet = ss.getSheetByName("Weekly_Summary");
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  opts = opts || {};
+  var filterUser = opts.userId ? normalizeEmployeeCodeKey_(opts.userId) : "";
+
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 12).getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    var r = values[i];
+    var rowCode = String(r[1] || "").trim().toUpperCase();
+    if (filterUser && rowCode !== filterUser) continue;
+
+    var weekPeriod = String(r[0] || "").trim();
+    var parts = weekPeriod.split(" to ");
+    out.push({
+      weekPeriod: weekPeriod,
+      weekStart: parts[0] || "",
+      weekEnd: parts[1] || "",
+      employeeCode: rowCode,
+      employeeName: String(r[2] || "").trim(),
+      designation: String(r[3] || "").trim(),
+      tasksBreakdown: String(r[4] || "").trim(),
+      daysRendered: Number(r[5] || 0),
+      grossTracked: String(r[6] || "").trim(),
+      totalIdleBreaks: String(r[7] || "").trim(),
+      netProductiveWork: String(r[8] || "").trim(),
+      regularHours: String(r[9] || "").trim(),
+      overtimeHours: String(r[10] || "").trim(),
+      avgActivity: String(r[11] || "0%")
+    });
+  }
+  return out;
+}
+
+function readMonthlySummaries(ss, opts) {
+  var sheet = ss.getSheetByName("Monthly_Summary");
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  opts = opts || {};
+  var filterUser = opts.userId ? normalizeEmployeeCodeKey_(opts.userId) : "";
+
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    var r = values[i];
+    var rowCode = String(r[1] || "").trim().toUpperCase();
+    if (filterUser && rowCode !== filterUser) continue;
+
+    out.push({
+      monthPeriod: String(r[0] || "").trim(),
+      employeeCode: rowCode,
+      employeeName: String(r[2] || "").trim(),
+      designation: String(r[3] || "").trim(),
+      primaryTasks: String(r[4] || "").trim(),
+      totalDaysRendered: Number(r[5] || 0),
+      grossTrackedHours: String(r[6] || "").trim(),
+      totalIdleBreaks: String(r[7] || "").trim(),
+      netProductiveWork: String(r[8] || "").trim(),
+      avgActivity: String(r[9] || "0%")
+    });
+  }
+  return out;
+}
+
+function formatHeaderRow(sheet, numColumns) {
+  sheet.getRange(1, 1, 1, numColumns)
+    .setFontWeight("bold")
+    .setBackground("#0f172a")
+    .setFontColor("#ffffff");
+  sheet.setFrozenRows(1);
+}
+
+function setupTextColumns() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  var t = ss.getSheetByName("Time_Logs");
+  if (t) forceTextColumns_(t, 6, 3);
+  var a = ss.getSheetByName("Daily_Attendance");
+  if (a) { forceTextColumns_(a, 2, 1); forceTextColumns_(a, 7, 2); }
+  var p = ss.getSheetByName("Live_Presence");
+  if (p) { forceTextColumns_(p, 9, 1); forceTextColumns_(p, 12, 1); }
+  var au = ss.getSheetByName("Audit_Logs");
+  if (au) forceTextColumns_(au, 2, 1);
+  var e = ss.getSheetByName("Employee_Directory");
+  if (e) forceTextColumns_(e, 7, 1);
+  Logger.log("Text columns set.");
+}
+
+function repairBadDurations() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  var sh = ss.getSheetByName("Time_Logs");
+  if (!sh || sh.getLastRow() <= 1) return;
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, 16).getValues();
+  var fixed = 0;
+  for (var i = 0; i < v.length; i++) {
+    var d = Number(v[i][8]) || 0;
+    var clean = sanitizeDuration_(d, asText_(v[i][6]), asText_(v[i][7]), 0);
+    if (clean !== d) {
+      sh.getRange(i + 2, 9).setValue(clean);
+      sh.getRange(i + 2, 10).setValue(
+        Math.floor(clean / 3600) + "h " + Math.floor((clean % 3600) / 60) + "m " + (clean % 60) + "s"
+      );
+      fixed++;
+    }
+  }
+  Logger.log("Repaired " + fixed + " rows.");
+}

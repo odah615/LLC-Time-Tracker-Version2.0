@@ -1922,6 +1922,136 @@ function createAllTabsNow() {
   SpreadsheetApp.flush();
   Logger.log("Initialized Version 2 Spreadsheet tabs with authoritative Employee_Directory successfully!");
 }
+
+/**
+ * Custom Top Menu for Google Sheets
+ */
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu("LLC Time Tracker")
+      .addItem("1-Click: Reformat All Dates & Timestamps (Manila Time)", "reformatAllTimestampsManila")
+      .addItem("1-Click: Clean Up & Auto-Close Stuck Sessions", "autoCloseStuckSessions")
+      .addSeparator()
+      .addItem("⚙️ Set Up Daily 11:00 PM Auto-Cleanup Trigger", "setupDailyAutoCleanupTrigger")
+      .addToUi();
+  } catch (err) {
+    Logger.log("onOpen menu notice: " + err);
+  }
+}
+
+/**
+ * 1-Click Reformat All Dates & Timestamps to Manila Local Time (Asia/Manila)
+ */
+function reformatAllTimestampsManila() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  var sh = ss.getSheetByName("Time_Logs");
+  if (!sh || sh.getLastRow() <= 1) return;
+
+  var range = sh.getRange(2, 6, sh.getLastRow() - 1, 3);
+  var values = range.getValues();
+  var updated = 0;
+
+  for (var i = 0; i < values.length; i++) {
+    var rawStart = values[i][1];
+    var rawEnd = values[i][2];
+
+    if (rawStart) {
+      var dStart = new Date(rawStart);
+      if (!isNaN(dStart.getTime())) {
+        values[i][1] = Utilities.formatDate(dStart, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
+        values[i][0] = Utilities.formatDate(dStart, "Asia/Manila", "yyyy-MM-dd");
+      }
+    }
+
+    if (rawEnd && rawEnd !== "In Progress" && String(rawEnd).indexOf("In Progress") === -1) {
+      var dEnd = new Date(rawEnd);
+      if (!isNaN(dEnd.getTime())) {
+        values[i][2] = Utilities.formatDate(dEnd, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
+      }
+    }
+    updated++;
+  }
+
+  range.setNumberFormat("@");
+  range.setValues(values);
+  try {
+    SpreadsheetApp.getUi().alert("Successfully reformatted " + updated + " rows into Manila Local Time (Asia/Manila)!");
+  } catch (e) {
+    Logger.log("Reformatted " + updated + " rows.");
+  }
+}
+
+/**
+ * Clean Up & Auto-Close Stuck Sessions
+ */
+function autoCloseStuckSessions() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  var sh = ss.getSheetByName("Time_Logs");
+  if (!sh || sh.getLastRow() <= 1) return 0;
+
+  var lastRow = sh.getLastRow();
+  var data = sh.getRange(2, 1, lastRow - 1, 16).getValues();
+  var cleanedCount = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    var status = String(data[i][13] || "").toLowerCase().trim();
+    var startTimeStr = data[i][6];
+    var grossSec = Number(data[i][8]) || 0;
+
+    if (status === "running" || status.indexOf("in progress") !== -1) {
+      var startTime = new Date(startTimeStr);
+      if (!isNaN(startTime.getTime())) {
+        var calculatedEndMs = startTime.getTime() + (grossSec > 0 ? grossSec * 1000 : 0);
+        var endDate = new Date(calculatedEndMs);
+
+        var formattedEndTime = Utilities.formatDate(endDate, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
+        var durStr = Math.floor(grossSec / 3600) + "h " +
+                     Math.floor((grossSec % 3600) / 60) + "m " +
+                     (grossSec % 60) + "s";
+
+        sh.getRange(i + 2, 8).setValue(formattedEndTime);
+        sh.getRange(i + 2, 9).setValue(grossSec);
+        sh.getRange(i + 2, 10).setValue(durStr);
+        sh.getRange(i + 2, 14).setValue("completed");
+        cleanedCount++;
+      }
+    }
+  }
+
+  if (cleanedCount > 0) {
+    rebuildWeeklyMonthlySummaries_(ss);
+  }
+
+  try {
+    SpreadsheetApp.getUi().alert("Cleaned up and auto-closed " + cleanedCount + " stuck running sessions!");
+  } catch (e) {
+    Logger.log("Cleaned up " + cleanedCount + " sessions.");
+  }
+  return cleanedCount;
+}
+
+/**
+ * Configure Daily 11:00 PM Trigger
+ */
+function setupDailyAutoCleanupTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "autoCloseStuckSessions") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  ScriptApp.newTrigger("autoCloseStuckSessions")
+    .timeBased()
+    .everyDays(1)
+    .atHour(23)
+    .create();
+
+  try {
+    SpreadsheetApp.getUi().alert("Daily 11:00 PM Auto-Cleanup Trigger successfully configured!");
+  } catch (e) {}
+}
 `;
 };
 

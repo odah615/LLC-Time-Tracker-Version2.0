@@ -1060,8 +1060,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fetchTimeLogsFromGoogleSheets(undefined, undefined, { userId: user.employeeCode || user.id }).then((res) => {
       if (res.success && Array.isArray(res.timeLogs)) {
         const mapped = res.timeLogs.map((l) => ({ ...l, status: l.status || 'completed' })) as TimeLog[];
-        setTimeLogs(mapped);
-        localStorage.setItem('trackpulse_timelogs', JSON.stringify(mapped));
+        let finalLogs = mapped;
+        try {
+          const empCode = String(user.employeeCode || user.id || '').trim();
+          if (empCode) {
+            const backupKey = `llc_daily_time_backup_${empCode}`;
+            const rawBackup = localStorage.getItem(backupKey);
+            if (rawBackup) {
+              const backupLogs: TimeLog[] = JSON.parse(rawBackup);
+              if (Array.isArray(backupLogs)) {
+                const serverLogIds = new Set(mapped.map((l) => l.id));
+                const missingLogs = backupLogs.filter((l) => l.status === 'completed' && !serverLogIds.has(l.id));
+                if (missingLogs.length > 0) {
+                  console.log(`[SELF-HEALING] Restored ${missingLogs.length} missing completed time logs from local client backup.`);
+                  finalLogs = [...mapped, ...missingLogs];
+                  fetch('/api/timelogs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(missingLogs),
+                  }).catch(() => {});
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Local time backup check notice:', e);
+        }
+
+        setTimeLogs(finalLogs);
+        localStorage.setItem('trackpulse_timelogs', JSON.stringify(finalLogs));
       }
     });
 
@@ -1300,6 +1327,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : prev.filter((l) => l.id !== newLog.id);
       const updated = [newLog, ...filtered];
       localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
+
+      // Save to local daily backup for self-healing recovery if network sync drops
+      if (newLog.status === 'completed') {
+        try {
+          const empCode = String(newLog.employeeCode || newLog.userId || '').trim();
+          if (empCode) {
+            const backupKey = `llc_daily_time_backup_${empCode}`;
+            const existingBackup: TimeLog[] = JSON.parse(localStorage.getItem(backupKey) || '[]');
+            const filteredBackup = existingBackup.filter((l) => l.id !== newLog.id);
+            const updatedBackup = [newLog, ...filteredBackup];
+            localStorage.setItem(backupKey, JSON.stringify(updatedBackup));
+          }
+        } catch (e) {}
+      }
+
       return updated;
     });
 
