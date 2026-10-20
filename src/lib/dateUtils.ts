@@ -23,6 +23,25 @@ export function getManilaDateString(date: Date = new Date(), timeZone: string = 
 }
 
 /**
+ * Returns ISO string in Asia/Manila timezone with explicit +08:00 offset
+ * e.g. "2026-10-20T01:50:50.695+08:00"
+ */
+export function getManilaIsoString(dateInput: Date | string | number = new Date()): string {
+  try {
+    const d = typeof dateInput === 'object' ? dateInput : new Date(dateInput);
+    if (isNaN(d.getTime())) {
+      return new Date().toISOString().replace('Z', '+08:00');
+    }
+    const manilaMs = d.getTime() + 8 * 60 * 60 * 1000;
+    const manilaDate = new Date(manilaMs);
+    const isoUtc = manilaDate.toISOString();
+    return isoUtc.replace('Z', '+08:00');
+  } catch {
+    return new Date().toISOString().replace('Z', '+08:00');
+  }
+}
+
+/**
  * Returns formatted 12-hour time string (e.g. "11:40 AM") in Asia/Manila timezone
  */
 export function getManilaTimeString(date: Date = new Date(), timeZone: string = DEFAULT_TIMEZONE): string {

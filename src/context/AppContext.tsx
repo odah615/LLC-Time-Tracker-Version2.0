@@ -19,7 +19,7 @@ import {
 } from '../types';
 import { doc, setDoc, deleteDoc, onSnapshot, collection, disableNetwork, enableNetwork } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { getManilaDateString, getManilaTimeString, formatLogStartTime, formatLogEndTime } from '../lib/dateUtils';
+import { getManilaDateString, getManilaTimeString, getManilaIsoString, formatLogStartTime, formatLogEndTime } from '../lib/dateUtils';
 import { getJitteredPollInterval } from '../lib/fetchUtils';
 import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee, isPlaceholderName, normalizeDesignation } from '../lib/userUtils';
 import {
@@ -620,7 +620,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const startMs = taskStartTimeRef.current || (now.getTime() - elapsedSeconds * 1000);
       const totalPaused = accumulatedPausedMsRef.current || (isPaused && pauseStartTimeRef.current ? (now.getTime() - pauseStartTimeRef.current) : 0);
       const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
-      const startTimeIso = new Date(startMs).toISOString();
+      const startTimeIso = getManilaIsoString(startMs);
 
       const prevSegmentId = activeSegmentIdRef.current;
       const completedTaskCategory = currentTask;
@@ -638,7 +638,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           designation: currentDesignation,
           task: completedTaskCategory,
           startTime: startTimeIso,
-          endTime: now.toISOString(),
+          endTime: getManilaIsoString(now),
           durationSeconds: duration,
           status: 'completed',
           geoTimezone: currentUser.geoTimezone || 'Asia/Manila',
@@ -682,7 +682,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         designation: currentDesignation,
         task: nextTask,
         date: getManilaDateString(new Date(newStartMs)),
-        startTime: new Date(newStartMs).toISOString(),
+        startTime: getManilaIsoString(newStartMs),
         endTime: 'In Progress (5m Sync)',
         durationSeconds: 1,
         status: 'running',
@@ -804,7 +804,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       designation: currentDesignation,
       task: currentTask,
       date: getManilaDateString(new Date(now)),
-      startTime: new Date(now).toISOString(),
+      startTime: getManilaIsoString(now),
       endTime: 'In Progress (5m Sync)',
       durationSeconds: 1,
       status: 'running',
@@ -957,7 +957,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const startMs = taskStartTimeRef.current || (now.getTime() - elapsedSeconds * 1000);
     const totalPaused = accumulatedPausedMsRef.current || (isPaused && pauseStartTimeRef.current ? (now.getTime() - pauseStartTimeRef.current) : 0);
     const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
-    const startTimeIso = new Date(startMs).toISOString();
+    const startTimeIso = getManilaIsoString(startMs);
 
     const segId = activeSegmentIdRef.current;
 
@@ -970,7 +970,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       designation: currentDesignation,
       task: currentTask,
       startTime: startTimeIso,
-      endTime: now.toISOString(),
+      endTime: getManilaIsoString(now),
       durationSeconds: duration,
       status: 'completed',
       geoTimezone: currentUser.geoTimezone || 'Asia/Manila',
