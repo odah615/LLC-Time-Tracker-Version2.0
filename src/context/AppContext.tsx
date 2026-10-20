@@ -683,7 +683,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         task: nextTask,
         date: getManilaDateString(new Date(newStartMs)),
         startTime: getManilaIsoString(newStartMs),
-        endTime: 'In Progress (5m Sync)',
+        endTime: 'In Progress (10m Sync)',
         durationSeconds: 1,
         status: 'running',
         geoTimezone: 'Asia/Manila',
@@ -805,7 +805,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       task: currentTask,
       date: getManilaDateString(new Date(now)),
       startTime: getManilaIsoString(now),
-      endTime: 'In Progress (5m Sync)',
+      endTime: 'In Progress (10m Sync)',
       durationSeconds: 1,
       status: 'running',
       geoTimezone: 'Asia/Manila',
@@ -1566,11 +1566,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }).catch(() => {});
       }
 
-      // 5-minute task duration synchronization (300,000 ms)
-      if (!isPausedRef.current && now - last5mSyncEpochMsRef.current >= 300000) {
+      // 10-minute task duration synchronization (600,000 ms)
+      if (!isPausedRef.current && now - last5mSyncEpochMsRef.current >= 600000) {
         last5mSyncEpochMsRef.current = now;
         const activeSegmentId = activeSegmentIdRef.current;
-        const startTimeIso = new Date(taskStartTimeRef.current).toISOString();
+        const startTimeIso = getManilaIsoString(taskStartTimeRef.current);
         const activeLog: TimeLog = {
           id: activeSegmentId,
           userId: currentUserRef.current.id,
@@ -1581,7 +1581,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           task: currentTaskRef.current,
           date: getManilaDateString(new Date(now)),
           startTime: startTimeIso,
-          endTime: 'In Progress (5m Sync)',
+          endTime: 'In Progress (10m Sync)',
           durationSeconds: Math.max(1, elapsed),
           status: 'running',
           geoTimezone: 'Asia/Manila',
@@ -1590,7 +1590,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           mouseActivityAvg: 95,
           keyboardActivityAvg: 90,
           idleSeconds: 0,
-          notes: 'Active task segment 5-minute sync',
+          notes: 'Active task segment 10-minute sync',
           appsUsed: [],
         };
 
@@ -1607,7 +1607,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify([activeLog]),
         }).catch((err) => {
-          console.warn('5-minute task duration sync notice:', err);
+          console.warn('10-minute task duration sync notice:', err);
         });
       }
 

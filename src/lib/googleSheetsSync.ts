@@ -1933,7 +1933,7 @@ function onOpen() {
       .addItem("1-Click: Reformat All Dates & Timestamps (Manila Time)", "reformatAllTimestampsManila")
       .addItem("1-Click: Clean Up & Auto-Close Stuck Sessions", "autoCloseStuckSessions")
       .addSeparator()
-      .addItem("⚙️ Set Up Daily 11:00 PM Auto-Cleanup Trigger", "setupDailyAutoCleanupTrigger")
+      .addItem("⚙️ Set Up Daily 11:50 PM Auto-Cleanup Trigger", "setupDailyAutoCleanupTrigger")
       .addToUi();
   } catch (err) {
     Logger.log("onOpen menu notice: " + err);
@@ -1988,43 +1988,71 @@ function reformatAllTimestampsManila() {
 function autoCloseStuckSessions() {
   var ss = getLLCTRACKERV2Spreadsheet();
   var sh = ss.getSheetByName("Time_Logs");
-  if (!sh || sh.getLastRow() <= 1) return 0;
-
-  var lastRow = sh.getLastRow();
-  var data = sh.getRange(2, 1, lastRow - 1, 16).getValues();
   var cleanedCount = 0;
+  var affectedDailyKeys = {};
 
-  for (var i = 0; i < data.length; i++) {
-    var status = String(data[i][13] || "").toLowerCase().trim();
-    var startTimeStr = data[i][6];
-    var grossSec = Number(data[i][8]) || 0;
+  if (sh && sh.getLastRow() > 1) {
+    var lastRow = sh.getLastRow();
+    var data = sh.getRange(2, 1, lastRow - 1, 16).getValues();
 
-    if (status === "running" || status.indexOf("in progress") !== -1) {
-      var startTime = new Date(startTimeStr);
-      if (!isNaN(startTime.getTime())) {
-        var calculatedEndMs = startTime.getTime() + (grossSec > 0 ? grossSec * 1000 : 0);
-        var endDate = new Date(calculatedEndMs);
+    for (var i = 0; i < data.length; i++) {
+      var status = String(data[i][13] || "").toLowerCase().trim();
+      var startTimeStr = data[i][6];
+      var grossSec = Number(data[i][8]) || 0;
+      var dateStr = normalizeLogDate_(data[i][5]);
+      var empCode = String(data[i][1] || "").trim().toUpperCase();
 
-        var formattedEndTime = Utilities.formatDate(endDate, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
-        var durStr = Math.floor(grossSec / 3600) + "h " +
-                     Math.floor((grossSec % 3600) / 60) + "m " +
-                     (grossSec % 60) + "s";
+      if (status === "running" || status.indexOf("in progress") !== -1) {
+        var startTime = new Date(startTimeStr);
+        if (!isNaN(startTime.getTime())) {
+          var calculatedEndMs = startTime.getTime() + (grossSec > 0 ? grossSec * 1000 : 0);
+          var endDate = new Date(calculatedEndMs);
 
-        sh.getRange(i + 2, 8).setValue(formattedEndTime);
-        sh.getRange(i + 2, 9).setValue(grossSec);
-        sh.getRange(i + 2, 10).setValue(durStr);
-        sh.getRange(i + 2, 14).setValue("completed");
-        cleanedCount++;
+          var formattedEndTime = Utilities.formatDate(endDate, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
+          var durStr = Math.floor(grossSec / 3600) + "h " +
+                       Math.floor((grossSec % 3600) / 60) + "m " +
+                       (grossSec % 60) + "s";
+
+          sh.getRange(i + 2, 8).setValue(formattedEndTime);
+          sh.getRange(i + 2, 9).setValue(grossSec);
+          sh.getRange(i + 2, 10).setValue(durStr);
+          sh.getRange(i + 2, 14).setValue("completed");
+          cleanedCount++;
+
+          if (dateStr && empCode) {
+            affectedDailyKeys[dateStr + "|" + empCode] = { date: dateStr, employeeCode: empCode };
+          }
+        }
       }
     }
   }
 
-  if (cleanedCount > 0) {
+  // Also check Daily_Summary tab for any stuck "In Progress" rows
+  var dailySheet = ss.getSheetByName("Daily_Summary");
+  if (dailySheet && dailySheet.getLastRow() > 1) {
+    var dData = dailySheet.getRange(2, 1, dailySheet.getLastRow() - 1, 14).getValues();
+    var todayManila = Utilities.formatDate(new Date(), "Asia/Manila", "yyyy-MM-dd");
+    for (var d = 0; d < dData.length; d++) {
+      var dDate = normalizeLogDate_(dData[d][0]);
+      var dCode = String(dData[d][1] || "").trim().toUpperCase();
+      var dStatus = String(dData[d][12] || "").trim().toLowerCase();
+      if ((dStatus === "in progress" && dDate < todayManila) || affectedDailyKeys[dDate + "|" + dCode]) {
+        affectedDailyKeys[dDate + "|" + dCode] = { date: dDate, employeeCode: dCode };
+      }
+    }
+  }
+
+  Object.keys(affectedDailyKeys).forEach(function(key) {
+    var item = affectedDailyKeys[key];
+    rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
+  });
+
+  if (cleanedCount > 0 || Object.keys(affectedDailyKeys).length > 0) {
     rebuildWeeklyMonthlySummaries_(ss);
   }
 
   try {
-    SpreadsheetApp.getUi().alert("Cleaned up and auto-closed " + cleanedCount + " stuck running sessions!");
+    SpreadsheetApp.getUi().alert("Cleaned up and auto-closed " + cleanedCount + " stuck running sessions and updated Daily Summaries!");
   } catch (e) {
     Logger.log("Cleaned up " + cleanedCount + " sessions.");
   }
@@ -2032,7 +2060,7 @@ function autoCloseStuckSessions() {
 }
 
 /**
- * Configure Daily 11:00 PM Trigger
+ * Configure Daily 11:50 PM Trigger
  */
 function setupDailyAutoCleanupTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
@@ -2049,7 +2077,7 @@ function setupDailyAutoCleanupTrigger() {
     .create();
 
   try {
-    SpreadsheetApp.getUi().alert("Daily 11:00 PM Auto-Cleanup Trigger successfully configured!");
+    SpreadsheetApp.getUi().alert("Daily 11:50 PM Auto-Cleanup Trigger successfully configured!");
   } catch (e) {}
 }
 `;

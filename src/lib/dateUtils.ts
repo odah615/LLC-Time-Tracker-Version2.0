@@ -42,6 +42,22 @@ export function getManilaIsoString(dateInput: Date | string | number = new Date(
 }
 
 /**
+ * Returns full date and time formatted in Manila timezone (e.g. "2026-10-20 11:40:51 PM")
+ */
+export function getManilaFullDateTimeString(dateInput: Date | string | number = new Date(), timeZone: string = DEFAULT_TIMEZONE): string {
+  try {
+    const d = typeof dateInput === 'object' ? dateInput : new Date(dateInput);
+    if (isNaN(d.getTime())) return String(dateInput);
+    const datePart = getManilaDateString(d, timeZone);
+    const timePart = getManilaTimeWithSeconds(d, timeZone);
+    return `${datePart} ${timePart}`;
+  } catch {
+    return String(dateInput);
+  }
+}
+
+
+/**
  * Returns formatted 12-hour time string (e.g. "11:40 AM") in Asia/Manila timezone
  */
 export function getManilaTimeString(date: Date = new Date(), timeZone: string = DEFAULT_TIMEZONE): string {
