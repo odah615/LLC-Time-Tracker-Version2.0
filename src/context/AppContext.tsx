@@ -210,7 +210,7 @@ interface AppContextType {
   setGoogleSheetsWebhookUrl: (url: string) => void;
   isAutoSyncToSheetsEnabled: boolean;
   setIsAutoSyncToSheetsEnabled: (val: boolean) => void;
-  triggerGoogleSheetsSync: (overrideUrl?: string) => Promise<{ success: boolean; message: string }>;
+  triggerGoogleSheetsSync: (overrideUrl?: string, customTimeLogs?: TimeLog[]) => Promise<{ success: boolean; message: string }>;
   importEmployeesFromGoogleSheets: (overrideUrl?: string) => Promise<{ success: boolean; count: number; message: string }>;
   importTimeLogsFromGoogleSheets: (overrideUrl?: string) => Promise<{ success: boolean; count: number; message: string }>;
   importPresenceFromGoogleSheets: (overrideUrl?: string) => Promise<{ success: boolean; count: number; message: string }>;
@@ -228,7 +228,7 @@ interface AppContextType {
   requestPasswordReset: (targetUserId: string, reason?: string) => void;
   approvePasswordResetRequest: (requestId: string) => void;
   rejectPasswordResetRequest: (requestId: string, notes?: string) => void;
-  addTimeLog: (log: Omit<TimeLog, 'id'>) => void;
+  addTimeLog: (log: Omit<TimeLog, 'id'> & { id?: string }) => TimeLog;
   updateTimeLog: (id: string, data: Partial<TimeLog>) => void;
   deleteTimeLog: (id: string) => void;
   approveManualTimeRequest: (id: string) => void;
@@ -1159,14 +1159,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
-  const triggerGoogleSheetsSync = async (overrideUrl?: string): Promise<{ success: boolean; message: string }> => {
+  const triggerGoogleSheetsSync = async (
+    overrideUrl?: string,
+    customTimeLogs?: TimeLog[]
+  ): Promise<{ success: boolean; message: string }> => {
     const targetUrl = overrideUrl || googleSheetsWebhookUrl;
     if (!targetUrl) {
       return { success: false, message: 'No Google Sheets Webhook URL configured.' };
     }
+    const logsToSync = customTimeLogs && customTimeLogs.length > 0 ? customTimeLogs : timeLogs;
     return syncDataToGoogleSheetsWebhook(
       targetUrl,
-      timeLogs,
+      logsToSync,
       users,
       auditLogs,
       payrollRecords,
@@ -1377,6 +1381,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch((err) => {
         console.warn('Failed to sync time log to remote spreadsheet:', err);
       });
+
+    return newLog;
   };
 
   const updateTimeLog = (id: string, data: Partial<TimeLog>) => {

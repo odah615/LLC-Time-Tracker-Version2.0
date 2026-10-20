@@ -11,7 +11,7 @@ interface ManualTimeModalProps {
 }
 
 export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, users, addTimeLog, submitManualTimeRequest, triggerGoogleSheetsSync } = useApp();
+  const { currentUser, users, timeLogs, addTimeLog, submitManualTimeRequest, triggerGoogleSheetsSync } = useApp();
 
   const isAdmin =
     currentUser?.role === 'admin' ||
@@ -109,11 +109,11 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
       };
 
       // 1. Add log to local state & Firestore
-      addTimeLog(newLogData);
+      const createdLog = addTimeLog(newLogData);
 
-      // 2. Trigger Google Sheets webhook sync immediately
+      // 2. Trigger Google Sheets webhook sync immediately with createdLog explicitly passed
       try {
-        await triggerGoogleSheetsSync();
+        await triggerGoogleSheetsSync(undefined, [createdLog, ...timeLogs]);
       } catch (err) {
         console.warn('Background sheets sync notice:', err);
       }
