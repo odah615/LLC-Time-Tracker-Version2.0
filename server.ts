@@ -606,6 +606,15 @@ app.post('/api/timelogs', (req, res) => {
   return res.json({ success: true, count: bridgeState.timelogs.length });
 });
 
+// DELETE /api/timelogs/:id - Delete a specific time log entry
+app.delete('/api/timelogs/:id', (req, res) => {
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: 'Log ID required' });
+  bridgeState.timelogs = bridgeState.timelogs.filter((l) => l.id !== id);
+  persistBridgeState();
+  return res.json({ success: true, remaining: bridgeState.timelogs.length });
+});
+
 // POST /api/daily-summary/ensure: Creates or verifies a Daily_Summary row when tracking starts
 app.post('/api/daily-summary/ensure', (req, res) => {
   const { employeeCode, userId, userName, designation, date } = req.body || {};

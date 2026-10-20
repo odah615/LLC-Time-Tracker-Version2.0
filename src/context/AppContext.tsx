@@ -1389,8 +1389,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTimeLogs((prev) => prev.map((l) => (l.id === id ? { ...l, ...data } : l)));
   };
 
-  const deleteTimeLog = (id: string) => {
+  const deleteTimeLog = async (id: string) => {
     setTimeLogs((prev) => prev.filter((l) => l.id !== id));
+    try {
+      if (db) {
+        await safeDeleteDoc(doc(db, 'timeLogs', id));
+      }
+      await fetch(`/api/timelogs/${id}`, { method: 'DELETE' }).catch(() => {});
+      triggerGoogleSheetsSync().catch(() => {});
+    } catch (err) {
+      console.warn('Failed to delete time log from backend/Firestore:', err);
+    }
   };
 
   const approveManualTimeRequest = (id: string) => {};
