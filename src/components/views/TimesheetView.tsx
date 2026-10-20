@@ -921,12 +921,14 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            {currentUser.role === 'team_lead' && (
+            {(currentUser.role === 'admin' || currentUser.role === 'va_admin' || (currentUser.employeeCode || '').toLowerCase().includes('admin') || (currentUser.employeeCode || '').toLowerCase().includes('super') || currentUser.id === 'usr-superadmin-red') && !isPersonalView && (
               <button
                 onClick={onOpenManualModal}
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-blue-200 cursor-pointer border border-blue-500 active:scale-95"
+                title="Super Admin Direct Manual Timesheet Entry"
               >
-                <Plus className="w-4 h-4" /> Add / Request Time
+                <Plus className="w-4 h-4" />
+                <span>+ Manual Entry Timesheet</span>
               </button>
             )}
             {currentUser.role !== 'agent' && currentUser.role !== 'team_lead' && !isPersonalView && (

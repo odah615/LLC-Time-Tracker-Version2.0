@@ -1160,7 +1160,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const triggerGoogleSheetsSync = async (overrideUrl?: string): Promise<{ success: boolean; message: string }> => {
-    return { success: true, message: 'Google Sheets sync processed.' };
+    const targetUrl = overrideUrl || googleSheetsWebhookUrl;
+    if (!targetUrl) {
+      return { success: false, message: 'No Google Sheets Webhook URL configured.' };
+    }
+    return syncDataToGoogleSheetsWebhook(
+      targetUrl,
+      timeLogs,
+      users,
+      auditLogs,
+      payrollRecords,
+      dailyAttendanceLogs,
+      idleLogs,
+      leaveRequests,
+      designationTasks,
+      rolePermissions,
+      [],
+      userPresenceList
+    );
   };
 
   const importEmployeesFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
