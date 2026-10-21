@@ -609,9 +609,29 @@ app.post('/api/timelogs', (req, res) => {
 // DELETE /api/timelogs/:id - Delete a specific time log entry
 app.delete('/api/timelogs/:id', (req, res) => {
   const { id } = req.params;
+  const { employeeCode, date, task, durationSeconds } = req.query as any;
   if (!id) return res.status(400).json({ error: 'Log ID required' });
-  const logToDelete = bridgeState.timelogs.find((l) => l.id === id);
-  bridgeState.timelogs = bridgeState.timelogs.filter((l) => l.id !== id);
+  const targetId = String(id).trim().toLowerCase();
+
+  const initialCount = bridgeState.timelogs.length;
+  bridgeState.timelogs = bridgeState.timelogs.filter((l) => {
+    const logId = String(l.id || '').trim().toLowerCase();
+    const logSessionId = String(l.sessionId || '').trim().toLowerCase();
+    const logSegmentId = String(l.segmentId || '').trim().toLowerCase();
+
+    const idMatches = logId === targetId || logSessionId === targetId || logSegmentId === targetId;
+    if (idMatches) return false;
+
+    if (employeeCode && date && l.date === date) {
+      const empMatch = String(l.employeeCode || l.userId || '').trim().toLowerCase() === String(employeeCode).trim().toLowerCase();
+      const taskMatch = !task || String(l.task || '').trim().toLowerCase() === String(task).trim().toLowerCase();
+      const durMatch = !durationSeconds || Math.abs(Number(l.durationSeconds) - Number(durationSeconds)) < 10;
+      if (empMatch && taskMatch && durMatch) return false;
+    }
+
+    return true;
+  });
+
   persistBridgeState();
 
   // Asynchronously notify Google Sheets Apps Script to delete row from Time_Logs & recalculate Daily_Summary
@@ -625,11 +645,15 @@ app.delete('/api/timelogs/:id', (req, res) => {
         action: 'DELETE_TIMELOG',
         logId: id,
         id: id,
+        employeeCode,
+        date,
+        task,
+        durationSeconds,
       }),
     }).catch(() => {});
   }
 
-  return res.json({ success: true, remaining: bridgeState.timelogs.length, deletedLog: logToDelete });
+  return res.json({ success: true, countBefore: initialCount, remaining: bridgeState.timelogs.length });
 });
 
 // POST /api/daily-summary/ensure: Creates or verifies a Daily_Summary row when tracking starts

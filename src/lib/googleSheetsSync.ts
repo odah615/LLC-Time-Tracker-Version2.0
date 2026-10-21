@@ -1272,14 +1272,29 @@ function handlePost_(e) {
       var deletedCount = 0;
       var affectedDailyKeys = {};
 
-      if (timeLogsSheet && targetId && timeLogsSheet.getLastRow() > 1) {
+      var targetEmp = String(data.employeeCode || data.userId || "").trim().toLowerCase();
+      var targetDate = String(data.date || "").trim();
+      var targetTask = String(data.task || "").trim().toLowerCase();
+      var targetDur = Number(data.durationSeconds || 0);
+
+      if (timeLogsSheet && timeLogsSheet.getLastRow() > 1) {
         var existingData = timeLogsSheet.getRange(2, 1, timeLogsSheet.getLastRow() - 1, 16).getValues();
         for (var dk = existingData.length - 1; dk >= 0; dk--) {
           var idStr = String(existingData[dk][0] || "").trim();
-          if (idStr === targetId || idStr.toLowerCase() === targetId.toLowerCase()) {
-            var rowDate = normalizeLogDate_(existingData[dk][5]);
-            var rowEmpCode = String(existingData[dk][1] || "").trim();
-            
+          var userIdStr = String(existingData[dk][15] || "").trim();
+          var rowEmpCode = String(existingData[dk][1] || "").trim();
+          var rowDate = normalizeLogDate_(existingData[dk][5]);
+          var rowTask = String(existingData[dk][14] || "").trim().toLowerCase();
+          var rowDur = Number(existingData[dk][8] || 0);
+
+          var isIdMatch = Boolean(targetId) && (idStr === targetId || idStr.toLowerCase() === targetId.toLowerCase() || userIdStr === targetId);
+          var isMetaMatch = Boolean(targetEmp) && Boolean(targetDate) &&
+            (rowEmpCode.toLowerCase() === targetEmp || userIdStr.toLowerCase() === targetEmp) &&
+            rowDate === targetDate &&
+            (!targetTask || rowTask === targetTask) &&
+            (!targetDur || Math.abs(rowDur - targetDur) < 10);
+
+          if (isIdMatch || isMetaMatch) {
             timeLogsSheet.deleteRow(dk + 2);
             deletedCount++;
 

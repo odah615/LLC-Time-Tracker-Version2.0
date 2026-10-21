@@ -1401,16 +1401,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTimeLog = async (id: string) => {
+    const targetLog = timeLogs.find((l) => String(l.id) === String(id) || String((l as any).sessionId || '') === String(id));
+
     setTimeLogs((prev) => {
-      const filtered = prev.filter((l) => l.id !== id);
+      const filtered = prev.filter((l) => {
+        const matchesId = String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
+        if (matchesId) return false;
+        if (targetLog) {
+          const sameEmp = String((l as any).employeeCode || l.userId || '').toLowerCase() === String(targetLog.employeeCode || targetLog.userId || '').toLowerCase();
+          const sameDate = l.date === targetLog.date;
+          const sameTask = String(l.task || '').toLowerCase() === String(targetLog.task || '').toLowerCase();
+          const sameDur = Math.abs(Number(l.durationSeconds) - Number(targetLog.durationSeconds)) < 5;
+          if (sameEmp && sameDate && sameTask && sameDur) return false;
+        }
+        return true;
+      });
       localStorage.setItem('trackpulse_timelogs', JSON.stringify(filtered));
       return filtered;
     });
+
     try {
       if (db) {
         await safeDeleteDoc(doc(db, 'timeLogs', id));
       }
-      await fetch(`/api/timelogs/${id}`, { method: 'DELETE' }).catch(() => {});
+
+      const qParams = new URLSearchParams();
+      if (targetLog) {
+        if (targetLog.employeeCode || targetLog.userId) qParams.set('employeeCode', targetLog.employeeCode || targetLog.userId);
+        if (targetLog.date) qParams.set('date', targetLog.date);
+        if (targetLog.task) qParams.set('task', targetLog.task);
+        if (targetLog.durationSeconds) qParams.set('durationSeconds', String(targetLog.durationSeconds));
+      }
+
+      await fetch(`/api/timelogs/${encodeURIComponent(id)}?${qParams.toString()}`, { method: 'DELETE' }).catch(() => {});
 
       if (googleSheetsWebhookUrl) {
         fetch(googleSheetsWebhookUrl, {
@@ -1420,6 +1443,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             action: 'DELETE_TIMELOG',
             logId: id,
             id: id,
+            employeeCode: targetLog?.employeeCode || targetLog?.userId,
+            date: targetLog?.date,
+            task: targetLog?.task,
+            durationSeconds: targetLog?.durationSeconds,
           }),
         }).catch(() => {});
       }
