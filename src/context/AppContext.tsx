@@ -1237,9 +1237,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         });
         setTimeLogs((prev) => {
-          const map = new Map(prev.map((item) => [item.id, item]));
+          const activeRunning = prev.filter(
+            (l) => l.status === 'running' || String(l.id).startsWith('active-seg-') || String(l.id).startsWith('seg-running-')
+          );
+          const map = new Map<string, TimeLog>();
           for (const item of mappedLogs) {
             map.set(item.id, item);
+          }
+          for (const item of activeRunning) {
+            if (!map.has(item.id)) {
+              map.set(item.id, item);
+            }
           }
           const merged = Array.from(map.values());
           localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
@@ -1420,9 +1428,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return filtered;
     });
 
+    // Clean up local daily backup keys in localStorage so self-healing doesn't restore the deleted log
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('llc_daily_time_backup_')) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const items: TimeLog[] = JSON.parse(raw);
+            if (Array.isArray(items)) {
+              const cleaned = items.filter((l) => {
+                const matchesId = String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
+                if (matchesId) return false;
+                if (targetLog) {
+                  const sameEmp = String((l as any).employeeCode || l.userId || '').toLowerCase() === String(targetLog.employeeCode || targetLog.userId || '').toLowerCase();
+                  const sameDate = l.date === targetLog.date;
+                  const sameTask = String(l.task || '').toLowerCase() === String(targetLog.task || '').toLowerCase();
+                  const sameDur = Math.abs(Number(l.durationSeconds) - Number(targetLog.durationSeconds)) < 5;
+                  if (sameEmp && sameDate && sameTask && sameDur) return false;
+                }
+                return true;
+              });
+              localStorage.setItem(key, JSON.stringify(cleaned));
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Error cleaning local daily backup on delete:', e);
+    }
+
     try {
       if (db) {
-        await safeDeleteDoc(doc(db, 'timeLogs', id));
+        await safeDeleteDoc(doc(db, 'timeLogs', id)).catch(() => {});
+        await safeDeleteDoc(doc(db, 'sessions', id)).catch(() => {});
       }
 
       const qParams = new URLSearchParams();
@@ -1444,6 +1483,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             logId: id,
             id: id,
             employeeCode: targetLog?.employeeCode || targetLog?.userId,
+            userId: targetLog?.userId || targetLog?.employeeCode,
             date: targetLog?.date,
             task: targetLog?.task,
             durationSeconds: targetLog?.durationSeconds,

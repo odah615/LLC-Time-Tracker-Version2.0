@@ -210,6 +210,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, any> = {
 interface BridgeData {
   presence: Record<string, any>;
   timelogs: any[];
+  deletedLogIds: string[];
   users: any[];
   attendance: any[];
   auditlogs: any[];
@@ -221,6 +222,7 @@ interface BridgeData {
 let bridgeState: BridgeData = {
   presence: {},
   timelogs: [],
+  deletedLogIds: [],
   users: [],
   attendance: [],
   auditlogs: [],
@@ -240,6 +242,7 @@ try {
       bridgeState = {
         presence: parsed.presence || {},
         timelogs: Array.isArray(parsed.timelogs) ? parsed.timelogs : [],
+        deletedLogIds: Array.isArray(parsed.deletedLogIds) ? parsed.deletedLogIds : [],
         users: Array.isArray(parsed.users) ? parsed.users : [],
         attendance: Array.isArray(parsed.attendance) ? parsed.attendance : [],
         auditlogs: Array.isArray(parsed.auditlogs) ? parsed.auditlogs : [],
@@ -548,9 +551,17 @@ app.post('/api/timelogs', (req, res) => {
   }
 
   const map = new Map<string, any>(bridgeState.timelogs.map((l) => [l.id, l]));
+  const deletedSet = new Set((bridgeState.deletedLogIds || []).map((id) => String(id).toLowerCase()));
 
   for (const rawLog of list) {
     if (rawLog && rawLog.id) {
+      const rawId = String(rawLog.id).toLowerCase();
+      const rawSessionId = String(rawLog.sessionId || '').toLowerCase();
+      if (deletedSet.has(rawId) || (rawSessionId && deletedSet.has(rawSessionId))) {
+        console.log(`[Timelogs] Blocked resurrection of deleted log: ${rawId}`);
+        continue;
+      }
+
       const canonicalCode = String(rawLog.employeeCode || rawLog.userId || '').trim().toLowerCase();
       if (!canonicalCode) continue;
 
@@ -613,6 +624,11 @@ app.delete('/api/timelogs/:id', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Log ID required' });
   const targetId = String(id).trim().toLowerCase();
 
+  if (!bridgeState.deletedLogIds) bridgeState.deletedLogIds = [];
+  if (!bridgeState.deletedLogIds.includes(targetId)) {
+    bridgeState.deletedLogIds.push(targetId);
+  }
+
   const initialCount = bridgeState.timelogs.length;
   bridgeState.timelogs = bridgeState.timelogs.filter((l) => {
     const logId = String(l.id || '').trim().toLowerCase();
@@ -620,13 +636,20 @@ app.delete('/api/timelogs/:id', (req, res) => {
     const logSegmentId = String(l.segmentId || '').trim().toLowerCase();
 
     const idMatches = logId === targetId || logSessionId === targetId || logSegmentId === targetId;
-    if (idMatches) return false;
+    if (idMatches) {
+      if (logId && !bridgeState.deletedLogIds.includes(logId)) bridgeState.deletedLogIds.push(logId);
+      if (logSessionId && !bridgeState.deletedLogIds.includes(logSessionId)) bridgeState.deletedLogIds.push(logSessionId);
+      return false;
+    }
 
     if (employeeCode && date && l.date === date) {
       const empMatch = String(l.employeeCode || l.userId || '').trim().toLowerCase() === String(employeeCode).trim().toLowerCase();
       const taskMatch = !task || String(l.task || '').trim().toLowerCase() === String(task).trim().toLowerCase();
       const durMatch = !durationSeconds || Math.abs(Number(l.durationSeconds) - Number(durationSeconds)) < 10;
-      if (empMatch && taskMatch && durMatch) return false;
+      if (empMatch && taskMatch && durMatch) {
+        if (logId && !bridgeState.deletedLogIds.includes(logId)) bridgeState.deletedLogIds.push(logId);
+        return false;
+      }
     }
 
     return true;
