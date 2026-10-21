@@ -680,8 +680,15 @@ function rebuildDailySummaryRow_(ss, workDate, employeeCode, defaultEmpInfo) {
       if (normalizeLogDate_(keys[j][0]) === workDate && String(keys[j][1] || "").trim().toUpperCase() === String(employeeCode || "").trim().toUpperCase()) { target = j + 2; break; }
     }
   }
-  if (target > 0) summary.getRange(target, 1, 1, headers.length).setValues([summaryRow]);
-  else summary.appendRow(summaryRow);
+  if (target > 0) {
+    if (matched.length === 0) {
+      summary.deleteRow(target);
+    } else {
+      summary.getRange(target, 1, 1, headers.length).setValues([summaryRow]);
+    }
+  } else if (matched.length > 0) {
+    summary.appendRow(summaryRow);
+  }
   if (summary.getLastRow() > 1) summary.getRange(2, 12, summary.getLastRow() - 1, 1).setNumberFormat('0"%"');
 }
 
@@ -2015,12 +2022,100 @@ function onOpen() {
       .createMenu("LLC Time Tracker")
       .addItem("1-Click: Reformat All Dates & Timestamps (Manila Time)", "reformatAllTimestampsManila")
       .addItem("1-Click: Clean Up & Auto-Close Stuck Sessions", "autoCloseStuckSessions")
+      .addItem("1-Click: Rebuild All Summaries (Daily, Weekly, Monthly)", "rebuildAllSummariesManual")
       .addSeparator()
+      .addItem("⚙️ Set Up Manual Edit/Delete Auto-Sync Trigger", "setupSpreadsheetChangeTrigger")
       .addItem("⚙️ Set Up Daily 11:50 PM Auto-Cleanup Trigger", "setupDailyAutoCleanupTrigger")
       .addToUi();
   } catch (err) {
     Logger.log("onOpen menu notice: " + err);
   }
+}
+
+/**
+ * Rebuild all Daily, Weekly, and Monthly Summaries from Time_Logs
+ */
+function rebuildAllSummariesFromTimeLogs_(ss) {
+  var canonical = ss.getSheetByName("Time_Logs");
+  var uniquePairs = {};
+  if (canonical && canonical.getLastRow() > 1) {
+    var source = canonical.getRange(2, 1, canonical.getLastRow() - 1, 16).getValues();
+    for (var i = 0; i < source.length; i++) {
+      var idStr = String(source[i][0] || "").trim().toLowerCase();
+      if (idStr.indexOf("live-") === 0) continue;
+      var empCode = String(source[i][1] || "").trim().toUpperCase();
+      var workDate = normalizeLogDate_(source[i][5]);
+      if (empCode && workDate) {
+        uniquePairs[workDate + "|" + empCode] = { date: workDate, employeeCode: empCode };
+      }
+    }
+  }
+
+  var dailySheet = ss.getSheetByName("Daily_Summary");
+  if (dailySheet && dailySheet.getLastRow() > 1) {
+    var existingDaily = dailySheet.getRange(2, 1, dailySheet.getLastRow() - 1, 2).getValues();
+    for (var d = 0; d < existingDaily.length; d++) {
+      var dDate = normalizeLogDate_(existingDaily[d][0]);
+      var dCode = String(existingDaily[d][1] || "").trim().toUpperCase();
+      if (dDate && dCode) {
+        uniquePairs[dDate + "|" + dCode] = { date: dDate, employeeCode: dCode };
+      }
+    }
+  }
+
+  Object.keys(uniquePairs).forEach(function(key) {
+    var item = uniquePairs[key];
+    rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
+  });
+
+  rebuildWeeklyMonthlySummaries_(ss);
+}
+
+function rebuildAllSummariesManual() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  rebuildAllSummariesFromTimeLogs_(ss);
+  try {
+    SpreadsheetApp.getUi().alert("Successfully recalculated and rebuilt all Daily, Weekly, and Monthly Summaries!");
+  } catch (e) {
+    Logger.log("Successfully rebuilt all summaries.");
+  }
+}
+
+/**
+ * Automated Spreadsheet Change Trigger
+ * Listens for manual row deletions, inserts, and cell edits in Google Sheets UI
+ */
+function onChange(e) {
+  try {
+    if (!e) return;
+    var ss = getLLCTRACKERV2Spreadsheet();
+    var activeSheet = ss.getActiveSheet();
+    var activeSheetName = activeSheet ? activeSheet.getName() : "";
+
+    if (activeSheetName === "Time_Logs" || e.changeType === "REMOVE_ROW" || e.changeType === "REMOVE_GRID" || e.changeType === "EDIT") {
+      rebuildAllSummariesFromTimeLogs_(ss);
+    }
+  } catch (err) {
+    Logger.log("onChange trigger notice: " + err);
+  }
+}
+
+function setupSpreadsheetChangeTrigger() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  var triggers = ScriptApp.getUserTriggers(ss);
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "onChange") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger("onChange")
+    .forSpreadsheet(ss)
+    .onChange()
+    .create();
+
+  try {
+    SpreadsheetApp.getUi().alert("Auto-Sync Trigger successfully set up! Manual row deletes/edits in Google Sheets will now auto-recalculate Daily Summaries.");
+  } catch (e) {}
 }
 
 /**
