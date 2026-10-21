@@ -1606,7 +1606,11 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                       {!isPersonalView && currentUser.role === 'admin' && (
                         <td className="py-3 px-4 text-right">
                           <button
-                            onClick={() => deleteTimeLog(log.id)}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              deleteTimeLog(log.id);
+                            }}
                             className="p-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all cursor-pointer"
                             title="Delete entry (Super Admin Only)"
                           >

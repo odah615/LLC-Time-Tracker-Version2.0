@@ -211,6 +211,7 @@ interface BridgeData {
   presence: Record<string, any>;
   timelogs: any[];
   deletedLogIds: string[];
+  deletedLogSignatures?: string[];
   users: any[];
   attendance: any[];
   auditlogs: any[];
@@ -223,6 +224,7 @@ let bridgeState: BridgeData = {
   presence: {},
   timelogs: [],
   deletedLogIds: [],
+  deletedLogSignatures: [],
   users: [],
   attendance: [],
   auditlogs: [],
@@ -243,6 +245,7 @@ try {
         presence: parsed.presence || {},
         timelogs: Array.isArray(parsed.timelogs) ? parsed.timelogs : [],
         deletedLogIds: Array.isArray(parsed.deletedLogIds) ? parsed.deletedLogIds : [],
+        deletedLogSignatures: Array.isArray(parsed.deletedLogSignatures) ? parsed.deletedLogSignatures : [],
         users: Array.isArray(parsed.users) ? parsed.users : [],
         attendance: Array.isArray(parsed.attendance) ? parsed.attendance : [],
         auditlogs: Array.isArray(parsed.auditlogs) ? parsed.auditlogs : [],
@@ -552,6 +555,10 @@ app.post('/api/timelogs', (req, res) => {
 
   const map = new Map<string, any>(bridgeState.timelogs.map((l) => [l.id, l]));
   const deletedSet = new Set((bridgeState.deletedLogIds || []).map((id) => String(id).toLowerCase()));
+  const sigSet = new Set((bridgeState.deletedLogSignatures || []).map((s) => String(s).toLowerCase()));
+
+  const makeSig = (emp: any, dt: any, t: any, dur: any) =>
+    `${String(emp || '').trim().toLowerCase()}|${String(dt || '').trim()}|${String(t || '').trim().toLowerCase()}|${Math.round(Number(dur || 0) / 10)}`;
 
   for (const rawLog of list) {
     if (rawLog && rawLog.id) {
@@ -559,6 +566,12 @@ app.post('/api/timelogs', (req, res) => {
       const rawSessionId = String(rawLog.sessionId || '').toLowerCase();
       if (deletedSet.has(rawId) || (rawSessionId && deletedSet.has(rawSessionId))) {
         console.log(`[Timelogs] Blocked resurrection of deleted log: ${rawId}`);
+        continue;
+      }
+
+      const sig = makeSig(rawLog.employeeCode || rawLog.userId, rawLog.date, rawLog.task, rawLog.durationSeconds);
+      if (sigSet.has(sig)) {
+        console.log(`[Timelogs] Blocked resurrection of deleted log signature: ${sig}`);
         continue;
       }
 
@@ -623,13 +636,25 @@ app.delete('/api/timelogs/:id', (req, res) => {
   const { employeeCode, date, task, durationSeconds } = req.query as any;
   if (!id) return res.status(400).json({ error: 'Log ID required' });
   const targetId = String(id).trim().toLowerCase();
+  const initialCount = bridgeState.timelogs.length;
 
   if (!bridgeState.deletedLogIds) bridgeState.deletedLogIds = [];
+  if (!bridgeState.deletedLogSignatures) bridgeState.deletedLogSignatures = [];
+
   if (!bridgeState.deletedLogIds.includes(targetId)) {
     bridgeState.deletedLogIds.push(targetId);
   }
 
-  const initialCount = bridgeState.timelogs.length;
+  const makeSig = (emp: any, dt: any, t: any, dur: any) =>
+    `${String(emp || '').trim().toLowerCase()}|${String(dt || '').trim()}|${String(t || '').trim().toLowerCase()}|${Math.round(Number(dur || 0) / 10)}`;
+
+  if (employeeCode && date) {
+    const querySig = makeSig(employeeCode, date, task, durationSeconds);
+    if (!bridgeState.deletedLogSignatures.includes(querySig)) {
+      bridgeState.deletedLogSignatures.push(querySig);
+    }
+  }
+
   bridgeState.timelogs = bridgeState.timelogs.filter((l) => {
     const logId = String(l.id || '').trim().toLowerCase();
     const logSessionId = String(l.sessionId || '').trim().toLowerCase();
@@ -639,6 +664,8 @@ app.delete('/api/timelogs/:id', (req, res) => {
     if (idMatches) {
       if (logId && !bridgeState.deletedLogIds.includes(logId)) bridgeState.deletedLogIds.push(logId);
       if (logSessionId && !bridgeState.deletedLogIds.includes(logSessionId)) bridgeState.deletedLogIds.push(logSessionId);
+      const lSig = makeSig(l.employeeCode || l.userId, l.date, l.task, l.durationSeconds);
+      if (!bridgeState.deletedLogSignatures!.includes(lSig)) bridgeState.deletedLogSignatures!.push(lSig);
       return false;
     }
 
@@ -648,6 +675,8 @@ app.delete('/api/timelogs/:id', (req, res) => {
       const durMatch = !durationSeconds || Math.abs(Number(l.durationSeconds) - Number(durationSeconds)) < 10;
       if (empMatch && taskMatch && durMatch) {
         if (logId && !bridgeState.deletedLogIds.includes(logId)) bridgeState.deletedLogIds.push(logId);
+        const lSig = makeSig(l.employeeCode || l.userId, l.date, l.task, l.durationSeconds);
+        if (!bridgeState.deletedLogSignatures!.includes(lSig)) bridgeState.deletedLogSignatures!.push(lSig);
         return false;
       }
     }

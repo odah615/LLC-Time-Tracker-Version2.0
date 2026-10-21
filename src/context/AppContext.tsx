@@ -1071,7 +1071,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const backupLogs: TimeLog[] = JSON.parse(rawBackup);
               if (Array.isArray(backupLogs)) {
                 const serverLogIds = new Set(mapped.map((l) => l.id));
-                const missingLogs = backupLogs.filter((l) => l.status === 'completed' && !serverLogIds.has(l.id));
+                const deletedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]'));
+                const deletedSigs = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_signatures') || '[]'));
+                const makeSig = (l: any) =>
+                  `${String(l.employeeCode || l.userId || '').trim().toLowerCase()}|${String(l.date || '').trim()}|${String(l.task || '').trim().toLowerCase()}|${Math.round(Number(l.durationSeconds || 0) / 10)}`;
+
+                const missingLogs = backupLogs.filter((l) => {
+                  if (l.status !== 'completed') return false;
+                  if (serverLogIds.has(l.id)) return false;
+                  if (deletedIds.has(String(l.id).toLowerCase())) return false;
+                  if (deletedSigs.has(makeSig(l))) return false;
+                  return true;
+                });
+
                 if (missingLogs.length > 0) {
                   console.log(`[SELF-HEALING] Restored ${missingLogs.length} missing completed time logs from local client backup.`);
                   finalLogs = [...mapped, ...missingLogs];
@@ -1410,6 +1422,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteTimeLog = async (id: string) => {
     const targetLog = timeLogs.find((l) => String(l.id) === String(id) || String((l as any).sessionId || '') === String(id));
+
+    // Save deleted ID and signature to localStorage to block client-side self-healing
+    try {
+      const deletedIds: string[] = JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]');
+      if (!deletedIds.includes(String(id).toLowerCase())) {
+        deletedIds.push(String(id).toLowerCase());
+      }
+      if (targetLog && (targetLog as any).sessionId && !deletedIds.includes(String((targetLog as any).sessionId).toLowerCase())) {
+        deletedIds.push(String((targetLog as any).sessionId).toLowerCase());
+      }
+      localStorage.setItem('trackpulse_deleted_ids', JSON.stringify(deletedIds));
+
+      if (targetLog) {
+        const deletedSigs: string[] = JSON.parse(localStorage.getItem('trackpulse_deleted_signatures') || '[]');
+        const sig = `${String(targetLog.employeeCode || targetLog.userId || '').trim().toLowerCase()}|${String(targetLog.date || '').trim()}|${String(targetLog.task || '').trim().toLowerCase()}|${Math.round(Number(targetLog.durationSeconds || 0) / 10)}`;
+        if (!deletedSigs.includes(sig)) {
+          deletedSigs.push(sig);
+        }
+        localStorage.setItem('trackpulse_deleted_signatures', JSON.stringify(deletedSigs));
+      }
+    } catch (e) {}
 
     setTimeLogs((prev) => {
       const filtered = prev.filter((l) => {
