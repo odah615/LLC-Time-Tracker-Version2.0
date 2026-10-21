@@ -1266,6 +1266,45 @@ function handlePost_(e) {
       });
     }
 
+    if (action === "DELETE_TIMELOG" || action === "DELETE_LOG") {
+      var targetId = String(data.logId || data.id || data.sessionId || "").trim();
+      var timeLogsSheet = ss.getSheetByName("Time_Logs");
+      var deletedCount = 0;
+      var affectedDailyKeys = {};
+
+      if (timeLogsSheet && targetId && timeLogsSheet.getLastRow() > 1) {
+        var existingData = timeLogsSheet.getRange(2, 1, timeLogsSheet.getLastRow() - 1, 16).getValues();
+        for (var dk = existingData.length - 1; dk >= 0; dk--) {
+          var idStr = String(existingData[dk][0] || "").trim();
+          if (idStr === targetId || idStr.toLowerCase() === targetId.toLowerCase()) {
+            var rowDate = normalizeLogDate_(existingData[dk][5]);
+            var rowEmpCode = String(existingData[dk][1] || "").trim();
+            
+            timeLogsSheet.deleteRow(dk + 2);
+            deletedCount++;
+
+            if (rowDate && rowEmpCode) {
+              affectedDailyKeys[rowDate + "|" + rowEmpCode.toUpperCase()] = { date: rowDate, employeeCode: rowEmpCode };
+            }
+          }
+        }
+      }
+
+      Object.keys(affectedDailyKeys).forEach(function(key) {
+        var item = affectedDailyKeys[key];
+        rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
+      });
+      SpreadsheetApp.flush();
+
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        deletedId: targetId,
+        deletedRows: deletedCount,
+        sheetsUpdated: ["Time_Logs", "Daily_Summary"]
+      });
+    }
+
     if (action === "SYNC_USERS" || action === "SYNC_EMPLOYEES" || action === "ADD_EMPLOYEE" || action === "UPDATE_EMPLOYEE") {
       var users = data.users || data.employees || (data.user ? [data.user] : (data.employee ? [data.employee] : ((data.employeeCode || data.username || data.name || data.fullName) ? [data] : [])));
       if (!Array.isArray(users)) users = [users];

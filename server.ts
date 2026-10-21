@@ -610,9 +610,26 @@ app.post('/api/timelogs', (req, res) => {
 app.delete('/api/timelogs/:id', (req, res) => {
   const { id } = req.params;
   if (!id) return res.status(400).json({ error: 'Log ID required' });
+  const logToDelete = bridgeState.timelogs.find((l) => l.id === id);
   bridgeState.timelogs = bridgeState.timelogs.filter((l) => l.id !== id);
   persistBridgeState();
-  return res.json({ success: true, remaining: bridgeState.timelogs.length });
+
+  // Asynchronously notify Google Sheets Apps Script to delete row from Time_Logs & recalculate Daily_Summary
+  const scriptUrl = process.env.APPS_SCRIPT_URL || bridgeState.config.webhookUrl;
+  if (scriptUrl) {
+    fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: process.env.LLCTRACKERV2_SHARED_SECRET,
+        action: 'DELETE_TIMELOG',
+        logId: id,
+        id: id,
+      }),
+    }).catch(() => {});
+  }
+
+  return res.json({ success: true, remaining: bridgeState.timelogs.length, deletedLog: logToDelete });
 });
 
 // POST /api/daily-summary/ensure: Creates or verifies a Daily_Summary row when tracking starts

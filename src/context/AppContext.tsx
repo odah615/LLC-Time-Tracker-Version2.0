@@ -1401,13 +1401,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTimeLog = async (id: string) => {
-    setTimeLogs((prev) => prev.filter((l) => l.id !== id));
+    setTimeLogs((prev) => {
+      const filtered = prev.filter((l) => l.id !== id);
+      localStorage.setItem('trackpulse_timelogs', JSON.stringify(filtered));
+      return filtered;
+    });
     try {
       if (db) {
         await safeDeleteDoc(doc(db, 'timeLogs', id));
       }
       await fetch(`/api/timelogs/${id}`, { method: 'DELETE' }).catch(() => {});
-      triggerGoogleSheetsSync().catch(() => {});
+
+      if (googleSheetsWebhookUrl) {
+        fetch(googleSheetsWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'DELETE_TIMELOG',
+            logId: id,
+            id: id,
+          }),
+        }).catch(() => {});
+      }
     } catch (err) {
       console.warn('Failed to delete time log from backend/Firestore:', err);
     }
