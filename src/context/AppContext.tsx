@@ -1053,11 +1053,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('trackpulse_current_user', JSON.stringify(user));
     if (token) localStorage.setItem('trackpulse_token', token);
 
-    // Strict employee session isolation: Clear previous logs immediately
-    setTimeLogs([]);
+    // Admin sees all team logs; regular employee sees their own logs
+    const isAdminUser = user.role === 'admin' || user.role === 'va_admin' || Boolean((user as any).isSuperAdmin);
+    const filterOpts = isAdminUser ? undefined : { userId: user.employeeCode || user.id };
 
-    // Fetch this employee's logs from server API
-    fetchTimeLogsFromGoogleSheets(undefined, undefined, { userId: user.employeeCode || user.id }).then((res) => {
+    // Fetch logs from server API
+    fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts).then((res) => {
       if (res.success && Array.isArray(res.timeLogs)) {
         const mapped = res.timeLogs.map((l) => ({ ...l, status: l.status || 'completed' })) as TimeLog[];
         let finalLogs = mapped;
@@ -1201,30 +1202,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const importTimeLogsFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
     try {
-      const res = await fetchTimeLogsFromGoogleSheets(undefined, undefined, { userId: currentUser.employeeCode || currentUser.id });
+      const isAdminUser = currentUser.role === 'admin' || currentUser.role === 'va_admin' || Boolean((currentUser as any).isSuperAdmin);
+      const filterOpts = isAdminUser ? undefined : { userId: currentUser.employeeCode || currentUser.id };
+      const res = await fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts);
       if (res.success && Array.isArray(res.timeLogs) && res.timeLogs.length > 0) {
-        const mappedLogs: TimeLog[] = res.timeLogs.map((l: any) => ({
-          id: l.id || l.sessionId || `log-${Math.random()}`,
-          userId: l.userId || currentUser.id,
-          employeeCode: l.employeeCode || currentUser.employeeCode,
-          userName: l.userName || currentUser.name,
-          userAvatar: l.userAvatar || currentUser.avatar || '',
-          designation: l.designation || currentUser.designation,
-          task: l.task || 'Work',
-          date: l.date || getManilaDateString(),
-          startTime: l.startTime || new Date().toISOString(),
-          endTime: l.endTime || 'In Progress',
-          durationSeconds: Number(l.durationSeconds || 0),
-          status: l.status || 'completed',
-          geoTimezone: 'Asia/Manila',
-          geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
-          geoLocalEndTime: l.geoLocalEndTime || l.endTime || '',
-          mouseActivityAvg: l.mousePercentage || 95,
-          keyboardActivityAvg: l.keyboardPercentage || 90,
-          idleSeconds: (l.idleMinutes || 0) * 60,
-          notes: l.notes || '',
-          appsUsed: [],
-        }));
+        const mappedLogs: TimeLog[] = res.timeLogs.map((l: any) => {
+          const matchedUser = users.find(
+            (u) =>
+              (u.employeeCode && l.employeeCode && String(u.employeeCode).toLowerCase() === String(l.employeeCode).toLowerCase()) ||
+              u.id === l.userId ||
+              (u.name && l.userName && u.name.toLowerCase().trim() === String(l.userName).toLowerCase().trim())
+          );
+          return {
+            id: l.id || l.sessionId || `log-${Math.random()}`,
+            userId: l.userId || matchedUser?.id || currentUser.id,
+            employeeCode: l.employeeCode || matchedUser?.employeeCode || currentUser.employeeCode,
+            userName: l.userName || matchedUser?.name || currentUser.name,
+            userAvatar: l.userAvatar || matchedUser?.avatar || '',
+            designation: l.designation || matchedUser?.designation || currentUser.designation,
+            task: l.task || 'Work',
+            date: l.date || getManilaDateString(),
+            startTime: l.startTime || new Date().toISOString(),
+            endTime: l.endTime || 'In Progress',
+            durationSeconds: Number(l.durationSeconds || 0),
+            status: l.status || 'completed',
+            geoTimezone: 'Asia/Manila',
+            geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
+            geoLocalEndTime: l.geoLocalEndTime || l.endTime || '',
+            mouseActivityAvg: l.mousePercentage ?? l.mouseActivityAvg ?? 95,
+            keyboardActivityAvg: l.keyboardPercentage ?? l.keyboardActivityAvg ?? 90,
+            idleSeconds: (l.idleMinutes || 0) * 60,
+            notes: l.notes || '',
+            appsUsed: [],
+          };
+        });
         setTimeLogs((prev) => {
           const map = new Map(prev.map((item) => [item.id, item]));
           for (const item of mappedLogs) {
