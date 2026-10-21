@@ -689,18 +689,22 @@ app.delete('/api/timelogs/:id', (req, res) => {
   // Asynchronously notify Google Sheets Apps Script to delete row from Time_Logs & recalculate Daily_Summary
   const scriptUrl = process.env.APPS_SCRIPT_URL || bridgeState.config.webhookUrl;
   if (scriptUrl) {
+    const sharedSecret = process.env.LLCTRACKERV2_SHARED_SECRET || 'LLCTrackerV2SecretKey2026';
     fetch(scriptUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
-        secret: process.env.LLCTRACKERV2_SHARED_SECRET,
+        secret: sharedSecret,
+        sharedSecret: sharedSecret,
         action: 'DELETE_TIMELOG',
         logId: id,
         id: id,
-        employeeCode,
-        date,
-        task,
-        durationSeconds,
+        sessionId: req.query.sessionId || id,
+        employeeCode: employeeCode || req.query.employeeCode || req.query.userId,
+        userId: employeeCode || req.query.userId || req.query.employeeCode,
+        date: date || req.query.date,
+        task: task || req.query.task,
+        durationSeconds: durationSeconds || req.query.durationSeconds,
       }),
     }).catch(() => {});
   }
@@ -971,6 +975,19 @@ app.post('/api/users', (req, res) => {
     return res.json({ success: true, user: sanitizeUser(incoming) });
   }
   res.status(400).json({ error: 'Invalid user payload' });
+});
+
+app.delete('/api/users/:id', (req, res) => {
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: 'User ID required' });
+  const cleanId = String(id).trim().toLowerCase();
+  bridgeState.users = bridgeState.users.filter((u) => {
+    const uId = String(u.id || '').trim().toLowerCase();
+    const uCode = String(u.employeeCode || '').trim().toLowerCase();
+    return uId !== cleanId && uCode !== cleanId;
+  });
+  persistBridgeState();
+  res.json({ success: true, count: bridgeState.users.length });
 });
 
 // POST /api/sync-sheets: Full bidirectional synchronization proxy

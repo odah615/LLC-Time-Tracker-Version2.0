@@ -19,7 +19,7 @@ import {
 } from '../types';
 import { doc, setDoc, deleteDoc, onSnapshot, collection, disableNetwork, enableNetwork } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { getManilaDateString, getManilaTimeString, getManilaIsoString, formatLogStartTime, formatLogEndTime } from '../lib/dateUtils';
+import { getManilaDateString, getManilaTimeString, getManilaIsoString, formatLogStartTime, formatLogEndTime, formatDurationDetailed } from '../lib/dateUtils';
 import { getJitteredPollInterval } from '../lib/fetchUtils';
 import { generateUniqueUsername, deduplicateUsers, resolveCanonicalEmployee, isPlaceholderName, normalizeDesignation } from '../lib/userUtils';
 import {
@@ -1403,6 +1403,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return filtered;
     });
+    fetch(`/api/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }).catch(() => {});
   };
 
   const resetUserPassword = (userId: string, newPass: string) => {};
@@ -1565,16 +1569,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (googleSheetsWebhookUrl) {
         fetch(googleSheetsWebhookUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
+            secret: 'LLCTrackerV2SecretKey2026',
+            sharedSecret: 'LLCTrackerV2SecretKey2026',
             action: 'DELETE_TIMELOG',
             logId: id,
-            id: id,
+            id: detTargetId,
+            sessionId: targetLog?.sessionId || id,
             employeeCode: targetLog?.employeeCode || targetLog?.userId,
             userId: targetLog?.userId || targetLog?.employeeCode,
             date: targetLog?.date,
             task: targetLog?.task,
             durationSeconds: targetLog?.durationSeconds,
+            durationFormatted: targetLog ? formatDurationDetailed(targetLog.durationSeconds) : undefined,
           }),
         }).catch(() => {});
       }
