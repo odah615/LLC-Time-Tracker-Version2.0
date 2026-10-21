@@ -67,6 +67,17 @@ export function sanitizeForFirestore<T>(val: T): T {
   return result as T;
 }
 
+export function getDeterministicLogId(l: any): string {
+  if (!l) return `log-${Date.now()}`;
+  if (l.id && typeof l.id === 'string' && !l.id.startsWith('log-0.')) return l.id;
+  if (l.sessionId && typeof l.sessionId === 'string' && !l.sessionId.startsWith('log-0.')) return l.sessionId;
+  const emp = String(l.employeeCode || l.userId || 'emp').trim().toLowerCase();
+  const date = String(l.date || '').trim();
+  const task = String(l.task || 'work').trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const dur = Number(l.durationSeconds || 0);
+  return `log-${emp}-${date}-${task}-${dur}`;
+}
+
 let isQuotaExhaustedGlobal = true;
 try {
   disableNetwork(db).catch(() => {});
@@ -1218,36 +1229,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const filterOpts = isAdminUser ? undefined : { userId: currentUser.employeeCode || currentUser.id };
       const res = await fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts);
       if (res.success && Array.isArray(res.timeLogs) && res.timeLogs.length > 0) {
-        const mappedLogs: TimeLog[] = res.timeLogs.map((l: any) => {
+        const deletedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]'));
+        const deletedSigs = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_signatures') || '[]'));
+
+        const mappedLogs: TimeLog[] = [];
+        for (const l of res.timeLogs) {
           const matchedUser = users.find(
             (u) =>
               (u.employeeCode && l.employeeCode && String(u.employeeCode).toLowerCase() === String(l.employeeCode).toLowerCase()) ||
               u.id === l.userId ||
               (u.name && l.userName && u.name.toLowerCase().trim() === String(l.userName).toLowerCase().trim())
           );
-          return {
-            id: l.id || l.sessionId || `log-${Math.random()}`,
+          const empCode = l.employeeCode || matchedUser?.employeeCode || currentUser.employeeCode;
+          const logDate = l.date || getManilaDateString();
+          const logTask = l.task || 'Work';
+          const logDur = Number(l.durationSeconds || 0);
+
+          const rawCandidate = {
+            ...l,
+            employeeCode: empCode,
+            date: logDate,
+            task: logTask,
+            durationSeconds: logDur,
+          };
+
+          const detId = getDeterministicLogId(rawCandidate);
+          const sig = `${String(empCode).trim().toLowerCase()}|${String(logDate).trim()}|${String(logTask).trim().toLowerCase()}|${Math.round(logDur / 10)}`;
+
+          if (
+            deletedIds.has(detId.toLowerCase()) ||
+            (l.id && deletedIds.has(String(l.id).toLowerCase())) ||
+            (l.sessionId && deletedIds.has(String(l.sessionId).toLowerCase())) ||
+            deletedSigs.has(sig)
+          ) {
+            continue;
+          }
+
+          const item: TimeLog = {
+            id: detId,
+            sessionId: l.sessionId || detId,
             userId: l.userId || matchedUser?.id || currentUser.id,
-            employeeCode: l.employeeCode || matchedUser?.employeeCode || currentUser.employeeCode,
+            employeeCode: empCode,
             userName: l.userName || matchedUser?.name || currentUser.name,
             userAvatar: l.userAvatar || matchedUser?.avatar || '',
             designation: l.designation || matchedUser?.designation || currentUser.designation,
-            task: l.task || 'Work',
-            date: l.date || getManilaDateString(),
+            task: logTask,
+            date: logDate,
             startTime: l.startTime || new Date().toISOString(),
             endTime: l.endTime || 'In Progress',
-            durationSeconds: Number(l.durationSeconds || 0),
+            durationSeconds: logDur,
             status: l.status || 'completed',
             geoTimezone: 'Asia/Manila',
             geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
             geoLocalEndTime: l.geoLocalEndTime || l.endTime || '',
-            mouseActivityAvg: l.mousePercentage ?? l.mouseActivityAvg ?? 95,
-            keyboardActivityAvg: l.keyboardPercentage ?? l.keyboardActivityAvg ?? 90,
-            idleSeconds: (l.idleMinutes || 0) * 60,
+            mouseActivityAvg: (l as any).mousePercentage ?? l.mouseActivityAvg ?? 95,
+            keyboardActivityAvg: (l as any).keyboardPercentage ?? l.keyboardActivityAvg ?? 90,
+            idleSeconds: ((l as any).idleMinutes || 0) * 60,
             notes: l.notes || '',
             appsUsed: [],
           };
-        });
+
+          mappedLogs.push(item);
+        }
+
         setTimeLogs((prev) => {
           const activeRunning = prev.filter(
             (l) => l.status === 'running' || String(l.id).startsWith('active-seg-') || String(l.id).startsWith('seg-running-')
@@ -1422,15 +1466,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteTimeLog = async (id: string) => {
     const targetLog = timeLogs.find((l) => String(l.id) === String(id) || String((l as any).sessionId || '') === String(id));
+    const detTargetId = targetLog ? getDeterministicLogId(targetLog) : String(id);
 
-    // Save deleted ID and signature to localStorage to block client-side self-healing
+    // Save deleted ID, deterministic ID, and signature to localStorage to block client-side self-healing
     try {
       const deletedIds: string[] = JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]');
-      if (!deletedIds.includes(String(id).toLowerCase())) {
-        deletedIds.push(String(id).toLowerCase());
+      const idsToAdd = [String(id).toLowerCase(), detTargetId.toLowerCase()];
+      if (targetLog && (targetLog as any).sessionId) {
+        idsToAdd.push(String((targetLog as any).sessionId).toLowerCase());
       }
-      if (targetLog && (targetLog as any).sessionId && !deletedIds.includes(String((targetLog as any).sessionId).toLowerCase())) {
-        deletedIds.push(String((targetLog as any).sessionId).toLowerCase());
+      for (const item of idsToAdd) {
+        if (!deletedIds.includes(item)) deletedIds.push(item);
       }
       localStorage.setItem('trackpulse_deleted_ids', JSON.stringify(deletedIds));
 
@@ -1446,7 +1492,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setTimeLogs((prev) => {
       const filtered = prev.filter((l) => {
-        const matchesId = String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
+        const lDetId = getDeterministicLogId(l);
+        const matchesId = lDetId === detTargetId || String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
         if (matchesId) return false;
         if (targetLog) {
           const sameEmp = String((l as any).employeeCode || l.userId || '').toLowerCase() === String(targetLog.employeeCode || targetLog.userId || '').toLowerCase();
@@ -1471,7 +1518,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const items: TimeLog[] = JSON.parse(raw);
             if (Array.isArray(items)) {
               const cleaned = items.filter((l) => {
-                const matchesId = String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
+                const lDetId = getDeterministicLogId(l);
+                const matchesId = lDetId === detTargetId || String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
                 if (matchesId) return false;
                 if (targetLog) {
                   const sameEmp = String((l as any).employeeCode || l.userId || '').toLowerCase() === String(targetLog.employeeCode || targetLog.userId || '').toLowerCase();
@@ -1493,8 +1541,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       if (db) {
-        await safeDeleteDoc(doc(db, 'timeLogs', id)).catch(() => {});
-        await safeDeleteDoc(doc(db, 'sessions', id)).catch(() => {});
+        await safeDeleteDoc(doc(db, 'timeLogs', detTargetId)).catch(() => {});
+        await safeDeleteDoc(doc(db, 'sessions', detTargetId)).catch(() => {});
+        if (id !== detTargetId) {
+          await safeDeleteDoc(doc(db, 'timeLogs', id)).catch(() => {});
+          await safeDeleteDoc(doc(db, 'sessions', id)).catch(() => {});
+        }
       }
 
       const qParams = new URLSearchParams();
@@ -1505,7 +1557,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (targetLog.durationSeconds) qParams.set('durationSeconds', String(targetLog.durationSeconds));
       }
 
-      await fetch(`/api/timelogs/${encodeURIComponent(id)}?${qParams.toString()}`, { method: 'DELETE' }).catch(() => {});
+      await fetch(`/api/timelogs/${encodeURIComponent(detTargetId)}?${qParams.toString()}`, { method: 'DELETE' }).catch(() => {});
+      if (id !== detTargetId) {
+        await fetch(`/api/timelogs/${encodeURIComponent(id)}?${qParams.toString()}`, { method: 'DELETE' }).catch(() => {});
+      }
 
       if (googleSheetsWebhookUrl) {
         fetch(googleSheetsWebhookUrl, {
