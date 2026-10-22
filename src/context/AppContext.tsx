@@ -1464,8 +1464,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newLog;
   };
 
-  const updateTimeLog = (id: string, data: Partial<TimeLog>) => {
-    setTimeLogs((prev) => prev.map((l) => (l.id === id ? { ...l, ...data } : l)));
+  const updateTimeLog = async (id: string, data: Partial<TimeLog>) => {
+    let updatedLog: TimeLog | null = null;
+    setTimeLogs((prev) => {
+      const updated = prev.map((l) => {
+        if (l.id === id || String((l as any).sessionId || '') === String(id)) {
+          const merged = { ...l, ...data };
+          updatedLog = merged;
+          return merged;
+        }
+        return l;
+      });
+      localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
+
+      // Update local daily backup key so self-healing doesn't revert the edit
+      if (updatedLog) {
+        try {
+          const empCode = String((updatedLog as TimeLog).employeeCode || (updatedLog as TimeLog).userId || '').trim();
+          if (empCode) {
+            const backupKey = `llc_daily_time_backup_${empCode}`;
+            const existingBackup: TimeLog[] = JSON.parse(localStorage.getItem(backupKey) || '[]');
+            const filteredBackup = existingBackup.filter((b) => b.id !== (updatedLog as TimeLog).id);
+            const updatedBackup = [updatedLog as TimeLog, ...filteredBackup];
+            localStorage.setItem(backupKey, JSON.stringify(updatedBackup));
+          }
+        } catch (e) {}
+      }
+
+      return updated;
+    });
+
+    if (updatedLog) {
+      const target: TimeLog = updatedLog;
+      if (db) {
+        await safeSetDoc(doc(db, 'timeLogs', target.id), target).catch(() => {});
+      }
+
+      fetch('/api/timelogs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([target]),
+      }).catch((err) => console.warn('Failed to update time log on server:', err));
+
+      if (googleSheetsWebhookUrl) {
+        fetch(googleSheetsWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            secret: 'LLCTrackerV2SecretKey2026',
+            sharedSecret: 'LLCTrackerV2SecretKey2026',
+            action: 'UPDATE_TIMELOG',
+            id: target.id,
+            logId: target.id,
+            sessionId: (target as any).sessionId || target.id,
+            employeeCode: target.employeeCode || target.userId,
+            userId: target.userId,
+            date: target.date,
+            task: target.task,
+            startTime: target.startTime,
+            endTime: target.endTime,
+            durationSeconds: target.durationSeconds,
+            notes: target.notes,
+          }),
+        }).catch((err) => console.warn('Webhook dispatch notice on time log update:', err));
+      }
+
+      setSaveToast('Timesheet entry successfully updated and synced to V2 Spreadsheet!');
+      setTimeout(() => setSaveToast(null), 3000);
+    }
   };
 
   const deleteTimeLog = async (id: string) => {

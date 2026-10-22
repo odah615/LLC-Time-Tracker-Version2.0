@@ -1356,6 +1356,68 @@ function handlePost_(e) {
       });
     }
 
+    if (action === "UPDATE_TIMELOG" || action === "EDIT_TIMELOG") {
+      var logItem = data.log || data.timeLog || data;
+      var targetId = String(logItem.id || logItem.logId || logItem.sessionId || data.logId || data.id || "").trim();
+      var timeLogsSheet = ss.getSheetByName("Time_Logs");
+      var updatedCount = 0;
+      var affectedDailyKeys = {};
+
+      if (timeLogsSheet && timeLogsSheet.getLastRow() > 1) {
+        var existingData = timeLogsSheet.getRange(2, 1, timeLogsSheet.getLastRow() - 1, 16).getValues();
+        var empCode = String(logItem.employeeCode || logItem.userId || data.employeeCode || data.userId || "").trim().toUpperCase();
+        var workDate = normalizeLogDate_(logItem.date || logItem.startTime || data.date);
+        var newTask = String(logItem.task || data.task || "").trim();
+        var newStart = String(logItem.startTime || data.startTime || "").trim();
+        var newEnd = String(logItem.endTime || data.endTime || "").trim();
+        var newDurSec = Number(logItem.durationSeconds || data.durationSeconds || 0);
+        var newNotes = String(logItem.notes || data.notes || "").trim();
+
+        for (var uI = 0; uI < existingData.length; uI++) {
+          var rowId = String(existingData[uI][0] || "").trim();
+          var rowCode = String(existingData[uI][1] || "").trim().toUpperCase();
+          var rowDate = normalizeLogDate_(existingData[uI][5]);
+
+          var isMatch = (targetId && (rowId.toLowerCase() === targetId.toLowerCase() || targetId.toLowerCase().indexOf(rowId.toLowerCase()) !== -1)) ||
+                        (empCode && rowCode === empCode && rowDate === workDate);
+
+          if (isMatch) {
+            var rowNum = uI + 2;
+            if (newTask) timeLogsSheet.getRange(rowNum, 15).setValue(newTask);
+            if (newStart) timeLogsSheet.getRange(rowNum, 7).setValue(newStart);
+            if (newEnd) timeLogsSheet.getRange(rowNum, 8).setValue(newEnd);
+            if (newDurSec > 0) {
+              timeLogsSheet.getRange(rowNum, 9).setValue(newDurSec);
+              timeLogsSheet.getRange(rowNum, 10).setValue(formatDetailedDuration_(newDurSec));
+            }
+
+            updatedCount++;
+            affectedDailyKeys[rowDate + "|" + rowCode] = { date: rowDate, employeeCode: rowCode };
+            if (workDate && empCode) affectedDailyKeys[workDate + "|" + empCode] = { date: workDate, employeeCode: empCode };
+            break;
+          }
+        }
+      }
+
+      Object.keys(affectedDailyKeys).forEach(function(key) {
+        var item = affectedDailyKeys[key];
+        rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
+      });
+
+      if (updatedCount > 0 || Object.keys(affectedDailyKeys).length > 0) {
+        rebuildWeeklyMonthlySummaries_(ss);
+      }
+
+      SpreadsheetApp.flush();
+
+      return jsonResponse({
+        status: "SUCCESS",
+        action: action,
+        updatedRows: updatedCount,
+        sheetsUpdated: ["Time_Logs", "Daily_Summary", "Weekly_Summary", "Monthly_Summary"]
+      });
+    }
+
     if (action === "SYNC_USERS" || action === "SYNC_EMPLOYEES" || action === "ADD_EMPLOYEE" || action === "UPDATE_EMPLOYEE") {
       var users = data.users || data.employees || (data.user ? [data.user] : (data.employee ? [data.employee] : ((data.employeeCode || data.username || data.name || data.fullName) ? [data] : [])));
       if (!Array.isArray(users)) users = [users];

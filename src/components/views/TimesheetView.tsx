@@ -5,6 +5,7 @@ import { DEFAULT_SPREADSHEET_ID, DEFAULT_SPREADSHEET_URL, generateAppsScriptCode
 import {
   Calendar,
   Trash2,
+  Edit3,
   Clock,
   Plus,
   FileSpreadsheet,
@@ -44,6 +45,7 @@ import { TASK_LIST } from '../../data/initialData';
 import { TimeLog } from '../../types';
 import { UserAvatar } from '../UserAvatar';
 import { resolveCanonicalEmployee } from '../../lib/userUtils';
+import { EditTimeLogModal } from '../modals/EditTimeLogModal';
 
 interface TimesheetViewProps {
   onOpenManualModal: () => void;
@@ -84,6 +86,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
   const [showWebhookSetup, setShowWebhookSetup] = useState(false);
   const [webhookInputVal, setWebhookInputVal] = useState(googleSheetsWebhookUrl || '');
   const [copiedScript, setCopiedScript] = useState(false);
+  const [editingLog, setEditingLog] = useState<TimeLog | null>(null);
 
   useEffect(() => {
     setWebhookInputVal(googleSheetsWebhookUrl || '');
@@ -1563,70 +1566,91 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                     <th className="py-3 px-4 text-slate-800">Total Time</th>
                     <th className="py-3 px-4">Activity Score</th>
                     <th className="py-3 px-4">Notes</th>
-                    {!isPersonalView && currentUser.role === 'admin' && (
-                      <th className="py-3 px-4 text-right">Action</th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {paginatedLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
-                      {!isPersonalView && (
-                        <td className="py-3 px-4 font-medium text-slate-900">
-                          {log.userName}
-                        </td>
-                      )}
-                      <td className="py-3 px-4 font-semibold text-blue-700">
-                        {log.task}
-                      </td>
-                      <td className="py-3 px-4 font-mono">
-                        {log.date} • {log.geoLocalStartTime || '—'}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-slate-600">
-                        {log.endTime === 'Running Live' ||
-                        log.endTime === 'In Progress (Live)' ||
-                        log.status === 'running'
-                          ? 'Running Live'
-                          : (log.geoLocalEndTime || '—')}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-slate-500">
-                        {log.durationSeconds}s
-                      </td>
-                      <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                        <span className="bg-blue-50 text-blue-800 border border-blue-200/60 px-2 py-0.5 rounded font-mono font-bold">
-                          {formatTotalTime(log.durationSeconds)}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 font-mono font-bold text-emerald-600">
-                        {Math.round((log.mouseActivityAvg + log.keyboardActivityAvg) / 2)}%
-                      </td>
-                      <td className="py-3 px-4 text-slate-500 max-w-xs truncate" title={log.notes}>
-                        {log.notes || 'Automated session log'}
-                      </td>
-                      {!isPersonalView && currentUser.role === 'admin' && (
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              deleteTimeLog(log.id);
-                            }}
-                            className="p-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all cursor-pointer"
-                            title="Delete entry (Super Admin Only)"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
+                      {!isPersonalView && (currentUser.role === 'admin' || currentUser.role === 'va_admin' || currentUser.role === 'team_lead' || (currentUser.employeeCode || '').toLowerCase().includes('admin')) && (
+                        <th className="py-3 px-4 text-right">Actions</th>
                       )}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                    {paginatedLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
+                        {!isPersonalView && (
+                          <td className="py-3 px-4 font-medium text-slate-900">
+                            {log.userName}
+                          </td>
+                        )}
+                        <td className="py-3 px-4 font-semibold text-blue-700">
+                          {log.task}
+                        </td>
+                        <td className="py-3 px-4 font-mono">
+                          {log.date} • {log.geoLocalStartTime || '—'}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-slate-600">
+                          {log.endTime === 'Running Live' ||
+                          log.endTime === 'In Progress (Live)' ||
+                          log.status === 'running'
+                            ? 'Running Live'
+                            : (log.geoLocalEndTime || '—')}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-slate-500">
+                          {log.durationSeconds}s
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold text-slate-900">
+                          <span className="bg-blue-50 text-blue-800 border border-blue-200/60 px-2 py-0.5 rounded font-mono font-bold">
+                            {formatTotalTime(log.durationSeconds)}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold text-emerald-600">
+                          {Math.round((log.mouseActivityAvg + log.keyboardActivityAvg) / 2)}%
+                        </td>
+                        <td className="py-3 px-4 text-slate-500 max-w-xs truncate" title={log.notes}>
+                          {log.notes || 'Automated session log'}
+                        </td>
+                        {!isPersonalView && (currentUser.role === 'admin' || currentUser.role === 'va_admin' || currentUser.role === 'team_lead' || (currentUser.employeeCode || '').toLowerCase().includes('admin')) && (
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setEditingLog(log);
+                                }}
+                                className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 transition-all cursor-pointer"
+                                title="Edit entry (Admin / TL)"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              {(currentUser.role === 'admin' || currentUser.role === 'va_admin' || (currentUser.employeeCode || '').toLowerCase().includes('admin')) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    deleteTimeLog(log.id);
+                                  }}
+                                  className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all cursor-pointer"
+                                  title="Delete entry (Super Admin Only)"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
+
+      <EditTimeLogModal
+        isOpen={Boolean(editingLog)}
+        onClose={() => setEditingLog(null)}
+        log={editingLog}
+      />
     </div>
   );
 };
