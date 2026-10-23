@@ -244,9 +244,9 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-white border border-slate-200 rounded-3xl max-w-xl w-full p-6 shadow-2xl text-slate-800 animate-in fade-in zoom-in duration-150 my-8">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4 overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-3xl max-w-xl w-full max-h-[88vh] sm:max-h-[90vh] flex flex-col p-5 sm:p-6 shadow-2xl text-slate-800 animate-in fade-in zoom-in duration-150 my-auto">
+        <div className="shrink-0 flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-600">
               <Edit3 className="w-6 h-6" />
@@ -263,13 +263,14 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors"
+            className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <form onSubmit={handleSave} className="mt-5 space-y-4">
+        <div className="flex-1 overflow-y-auto py-3 space-y-4 pr-1">
+          <form id="edit-timelog-form" onSubmit={handleSave} className="space-y-4">
           {/* Target Employee Info Header */}
           <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between">
             <div>
@@ -553,31 +554,33 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
               <span>{statusMsg}</span>
             </div>
           )}
+          </form>
+        </div>
 
-          {/* Modal Actions */}
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-lg shadow-indigo-600/20 transition-colors"
-            >
-              {isSaving ? (
-                <>Saving & Syncing...</>
-              ) : (
-                <>
-                  <Check className="w-4 h-4" /> Save & Sync Timesheet
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+        {/* Sticky Modal Actions Footer */}
+        <div className="shrink-0 pt-3 border-t border-slate-100 flex items-center justify-end gap-3 bg-white mt-auto">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="edit-timelog-form"
+            disabled={isSaving}
+            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-lg shadow-indigo-600/20 transition-colors cursor-pointer"
+          >
+            {isSaving ? (
+              <>Saving & Syncing...</>
+            ) : (
+              <>
+                <Check className="w-4 h-4" /> Save & Sync Timesheet
+              </>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

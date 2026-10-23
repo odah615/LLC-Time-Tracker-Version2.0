@@ -1388,7 +1388,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             )}
 
             {!isPersonalView && canSearchAgents && (
-              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 w-36 sm:w-44 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all shadow-sm">
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 w-52 sm:w-72 md:w-80 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all shadow-sm">
                 <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <input
                   type="text"
@@ -1667,11 +1667,10 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                                     e.stopPropagation();
                                     completeSessionLog(log.id);
                                   }}
-                                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 transition-all cursor-pointer flex items-center gap-1 text-xs font-bold shadow-xs"
+                                  className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-all cursor-pointer"
                                   title="Complete Session & Tag Log as Completed"
                                 >
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                                  <span className="hidden sm:inline">Complete Session</span>
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                                 </button>
                               )}
                               <button

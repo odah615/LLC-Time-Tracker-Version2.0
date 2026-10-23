@@ -1663,12 +1663,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    // 1. Update time log to completed status
     await updateTimeLog(target.id, {
       status: 'completed',
       endTime: endTimeIso,
       geoLocalEndTime: geoLocalEndTime,
       notes: target.notes ? `${target.notes} (Session finalized)` : 'Session finalized by Admin',
     });
+
+    // 2. Clear presence tracking flag so allAvailableLogs won't re-inject a live running overlay
+    const targetEmpCode = String(target.employeeCode || target.userId || '').trim().toLowerCase();
+    setUserPresenceList((prev) =>
+      prev.map((p) => {
+        const pCode = String(p.employeeCode || p.userId || '').trim().toLowerCase();
+        if (pCode === targetEmpCode || p.userId === target.userId) {
+          return {
+            ...p,
+            isTracking: false,
+            isOnline: false,
+            status: 'offline',
+            currentTask: 'Shift Concluded',
+          };
+        }
+        return p;
+      })
+    );
+
+    fetch('/api/presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: target.userId,
+        employeeCode: target.employeeCode || target.userId,
+        isOnline: false,
+        status: 'offline',
+        isTracking: false,
+        isPaused: false,
+        currentTask: 'Shift Concluded',
+        lastHeartbeat: new Date().toISOString(),
+      }),
+    }).catch(() => {});
   };
 
   const deleteTimeLog = async (id: string) => {
