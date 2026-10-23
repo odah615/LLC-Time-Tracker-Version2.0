@@ -68,6 +68,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     dailyAttendanceLogs,
     currentUser,
     deleteTimeLog,
+    completeSessionLog,
     formatDuration,
     isTracking,
     isPaused,
@@ -1609,7 +1610,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                     <th className="py-3 px-4">Date & Start Time</th>
                     <th className="py-3 px-4">End Time</th>
                     <th className="py-3 px-4">Duration (s)</th>
-                    <th className="py-3 px-4 text-slate-800">Total Time</th>
+                    <th className="py-3 px-4 text-slate-800 whitespace-nowrap min-w-[95px]">Total Time</th>
                     <th className="py-3 px-4">Activity Score</th>
                     <th className="py-3 px-4">Notes</th>
                       {!isPersonalView && (currentUser.role === 'admin' || currentUser.role === 'va_admin' || currentUser.role === 'team_lead' || (currentUser.employeeCode || '').toLowerCase().includes('admin')) && (
@@ -1618,7 +1619,13 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-800">
-                    {paginatedLogs.map((log) => (
+                    {paginatedLogs.map((log) => {
+                      const isUnclosedOrRunning =
+                        log.status === 'running' ||
+                        String(log.endTime || '').includes('In Progress') ||
+                        String(log.endTime || '').includes('Running Live');
+
+                      return (
                       <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
                         {!isPersonalView && (
                           <td className="py-3 px-4 font-medium text-slate-900">
@@ -1632,17 +1639,15 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                           {log.date} • {log.geoLocalStartTime || '—'}
                         </td>
                         <td className="py-3 px-4 font-mono text-slate-600">
-                          {log.endTime === 'Running Live' ||
-                          log.endTime === 'In Progress (Live)' ||
-                          log.status === 'running'
+                          {isUnclosedOrRunning
                             ? 'Running Live'
                             : (log.geoLocalEndTime || '—')}
                         </td>
                         <td className="py-3 px-4 font-mono text-slate-500">
                           {log.durationSeconds}s
                         </td>
-                        <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                          <span className="bg-blue-50 text-blue-800 border border-blue-200/60 px-2 py-0.5 rounded font-mono font-bold">
+                        <td className="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap min-w-[95px]">
+                          <span className="bg-blue-50 text-blue-800 border border-blue-200/60 px-2.5 py-1 rounded font-mono font-bold whitespace-nowrap inline-block">
                             {formatTotalTime(log.durationSeconds)}
                           </span>
                         </td>
@@ -1655,6 +1660,20 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                         {!isPersonalView && (currentUser.role === 'admin' || currentUser.role === 'va_admin' || currentUser.role === 'team_lead' || (currentUser.employeeCode || '').toLowerCase().includes('admin')) && (
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {isUnclosedOrRunning && (
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    completeSessionLog(log.id);
+                                  }}
+                                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 transition-all cursor-pointer flex items-center gap-1 text-xs font-bold shadow-xs"
+                                  title="Complete Session & Tag Log as Completed"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                                  <span className="hidden sm:inline">Complete Session</span>
+                                </button>
+                              )}
                               <button
                                 onClick={(e) => {
                                   e.preventDefault();
@@ -1704,7 +1723,8 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                           </td>
                         )}
                       </tr>
-                    ))}
+                    );
+                    })}
                   </tbody>
                 </table>
               </div>

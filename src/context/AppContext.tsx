@@ -242,6 +242,7 @@ interface AppContextType {
   rejectPasswordResetRequest: (requestId: string, notes?: string) => void;
   addTimeLog: (log: Omit<TimeLog, 'id'> & { id?: string }) => TimeLog;
   updateTimeLog: (id: string, data: Partial<TimeLog>) => void;
+  completeSessionLog: (logId: string) => Promise<void>;
   deleteTimeLog: (id: string) => void;
   approveManualTimeRequest: (id: string) => void;
   rejectManualTimeRequest: (id: string) => void;
@@ -1038,6 +1039,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setSessionIdleDeductionSeconds(0);
 
+    // Finalizer Sweep: Clean up any stuck / unclosed running sessions for this user on today's date
+    const empCode = String(currentUser.employeeCode || currentUser.id || '').trim().toLowerCase();
+    const stuckLogsToFinalize: TimeLog[] = [];
+
+    timeLogs.forEach((l) => {
+      const logEmpCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+      const isSameUser = logEmpCode === empCode || l.userId === currentUser.id;
+      const isRunning = l.status === 'running' || String(l.endTime || '').includes('In Progress') || String(l.endTime || '').includes('Running');
+      const isDifferentSegment = l.id !== segId;
+
+      if (isSameUser && isRunning && isDifferentSegment) {
+        let computedEndIso = l.endTime;
+        let computedGeoEnd = l.geoLocalEndTime;
+        if (l.startTime) {
+          const lStartMs = new Date(l.startTime).getTime();
+          if (!isNaN(lStartMs) && (l.durationSeconds || 0) > 0) {
+            const endD = new Date(lStartMs + (l.durationSeconds || 0) * 1000);
+            computedEndIso = getManilaIsoString(endD);
+            computedGeoEnd = getManilaTimeString(endD);
+          } else {
+            computedEndIso = getManilaIsoString(now);
+            computedGeoEnd = getManilaTimeString(now);
+          }
+        } else {
+          computedEndIso = getManilaIsoString(now);
+          computedGeoEnd = getManilaTimeString(now);
+        }
+
+        const finalizedLog: TimeLog = {
+          ...l,
+          status: 'completed',
+          endTime: computedEndIso,
+          geoLocalEndTime: computedGeoEnd,
+          notes: l.notes ? `${l.notes} (Auto-closed on tracker stop)` : 'Auto-closed on tracker stop',
+        };
+        stuckLogsToFinalize.push(finalizedLog);
+      }
+    });
+
+    if (stuckLogsToFinalize.length > 0) {
+      console.log(`[FINALIZER SWEEP] Cleaned up and finalized ${stuckLogsToFinalize.length} unclosed sessions for ${currentUser.name}.`);
+      stuckLogsToFinalize.forEach((fLog) => {
+        updateTimeLog(fLog.id, fLog);
+      });
+    }
+
+    // Call server endpoint to finalize shift in server memory as well
+    fetch('/api/timelogs/finalize-shift', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        employeeCode: currentUser.employeeCode || currentUser.id,
+        userId: currentUser.id,
+        date: todayStr,
+      }),
+    }).catch(() => {});
+
     setIsTracking(false);
     setIsPaused(false);
     setElapsedSeconds(0);
@@ -1575,6 +1633,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSaveToast('Timesheet entry successfully updated and synced to V2 Spreadsheet!');
       setTimeout(() => setSaveToast(null), 3000);
     }
+  };
+
+  const completeSessionLog = async (logId: string) => {
+    const target = timeLogs.find(
+      (l) => l.id === logId || String((l as any).sessionId || '') === String(logId)
+    );
+    if (!target) return;
+
+    const now = new Date();
+    let endTimeIso = target.endTime;
+    let geoLocalEndTime = target.geoLocalEndTime;
+
+    if (
+      target.startTime &&
+      (!target.endTime ||
+        target.endTime.includes('Progress') ||
+        target.endTime.includes('Running') ||
+        target.status === 'running')
+    ) {
+      const startMs = new Date(target.startTime).getTime();
+      if (!isNaN(startMs) && (target.durationSeconds || 0) > 0) {
+        const computedEnd = new Date(startMs + (target.durationSeconds || 0) * 1000);
+        endTimeIso = getManilaIsoString(computedEnd);
+        geoLocalEndTime = getManilaTimeString(computedEnd);
+      } else {
+        endTimeIso = getManilaIsoString(now);
+        geoLocalEndTime = getManilaTimeString(now);
+      }
+    }
+
+    await updateTimeLog(target.id, {
+      status: 'completed',
+      endTime: endTimeIso,
+      geoLocalEndTime: geoLocalEndTime,
+      notes: target.notes ? `${target.notes} (Session finalized)` : 'Session finalized by Admin',
+    });
   };
 
   const deleteTimeLog = async (id: string) => {
@@ -2137,6 +2231,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rejectPasswordResetRequest,
         addTimeLog,
         updateTimeLog,
+        completeSessionLog,
         deleteTimeLog,
         approveManualTimeRequest,
         rejectManualTimeRequest,

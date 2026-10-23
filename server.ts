@@ -525,6 +525,61 @@ app.post('/api/presence', (req, res) => {
   res.json({ success: true, presence: updatedPresence });
 });
 
+app.post('/api/timelogs/finalize-shift', (req, res) => {
+  const { employeeCode, userId, date } = req.body || {};
+  if (!employeeCode && !userId) {
+    return res.status(400).json({ error: 'employeeCode or userId is required' });
+  }
+
+  const emp = String(employeeCode || userId || '').trim().toLowerCase();
+  const targetDate = date ? String(date).trim() : null;
+  const finalizedLogs: any[] = [];
+
+  bridgeState.timelogs = bridgeState.timelogs.map((l) => {
+    const logEmp = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+    const matchesEmp = logEmp === emp;
+    const matchesDate = !targetDate || l.date === targetDate;
+    const isRunning = l.status === 'running' || String(l.endTime || '').includes('In Progress') || String(l.endTime || '').includes('Running');
+
+    if (matchesEmp && matchesDate && isRunning) {
+      let endTimeIso = l.endTime;
+      let geoLocalEndTime = l.geoLocalEndTime;
+      const now = new Date();
+      if (l.startTime) {
+        const startMs = new Date(l.startTime).getTime();
+        if (!isNaN(startMs) && (l.durationSeconds || 0) > 0) {
+          const endD = new Date(startMs + (l.durationSeconds || 0) * 1000);
+          endTimeIso = endD.toISOString();
+          geoLocalEndTime = endD.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } else {
+          endTimeIso = now.toISOString();
+          geoLocalEndTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+      } else {
+        endTimeIso = now.toISOString();
+        geoLocalEndTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+
+      const updated = {
+        ...l,
+        status: 'completed',
+        endTime: endTimeIso,
+        geoLocalEndTime,
+        notes: l.notes ? `${l.notes} (Shift finalized on server)` : 'Shift finalized on server',
+      };
+      finalizedLogs.push(updated);
+      return updated;
+    }
+    return l;
+  });
+
+  if (finalizedLogs.length > 0) {
+    persistBridgeState();
+  }
+
+  res.json({ success: true, count: finalizedLogs.length, finalizedLogs });
+});
+
 app.get('/api/timelogs', (req, res) => {
   const { userId, date } = req.query as { userId?: string; date?: string };
   let logs = bridgeState.timelogs;
