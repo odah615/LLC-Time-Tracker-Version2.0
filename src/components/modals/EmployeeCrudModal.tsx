@@ -192,6 +192,7 @@ export const EmployeeCrudModal: React.FC<EmployeeCrudModalProps> = ({
         joinDate: finalJoinDate,
         screenshotMonitored: false,
         activityMonitored: false,
+        idleTrackingEnabled: false,
         department: finalDesignation.includes('Sales')
           ? 'Sales & Outreach'
           : finalDesignation.includes('QA')

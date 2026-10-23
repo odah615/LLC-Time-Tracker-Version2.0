@@ -185,6 +185,7 @@ interface AppContextType {
   recordIdleInactivityEvent: (idleMinutes: number, reason?: string) => void;
   simulateIdleEvent: (minutes?: number) => void;
   restoreInactivityDeduction: () => void;
+  setBulkIdleTracking: (enabled: boolean) => void;
   isDualMonitorMode: boolean;
   toggleDualMonitorMode: () => void;
   storageEngineMode: 'unlimited_bridge' | 'firestore';
@@ -568,6 +569,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [sessionIdleDeductionSeconds, setSessionIdleDeductionSeconds] = useState<number>(0);
   const [isIdleAlertActive, setIsIdleAlertActive] = useState<boolean>(false);
 
+  const lastUserActivityMsRef = useRef<number>(Date.now());
+  const screenBlackoutStartMsRef = useRef<number | null>(null);
+
   const [inactivityAlertState, setInactivityAlertState] = useState<{
     isOpen: boolean;
     idleMinutes: number;
@@ -579,6 +583,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const respondToInactivityAlert = (action: 'stay_active' | 'pause_tracker') => {
+    lastUserActivityMsRef.current = Date.now();
+    screenBlackoutStartMsRef.current = null;
     if (action === 'stay_active') {
       setIsIdleAlertActive(false);
       setInactivityAlertState({ isOpen: false, idleMinutes: 10, remainingSeconds: 300 });
@@ -604,6 +610,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const restoreInactivityDeduction = () => {
     setIsIdleAlertActive(false);
   };
+
+  const setBulkIdleTracking = (enabled: boolean) => {
+    setUsers((prev) => {
+      const updated = prev.map((u) => ({ ...u, idleTrackingEnabled: enabled }));
+      localStorage.setItem('trackpulse_users', JSON.stringify(updated));
+      return updated;
+    });
+    fetch('/api/users', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(users.map((u) => ({ ...u, idleTrackingEnabled: enabled }))),
+    }).catch(() => {});
+  };
+
+  // Global activity listener: updates activity timestamp and automatically closes inactivity modal on mouse move or keypress
+  useEffect(() => {
+    const handleGlobalActivity = () => {
+      lastUserActivityMsRef.current = Date.now();
+      if (inactivityAlertState.isOpen) {
+        setIsIdleAlertActive(false);
+        setInactivityAlertState({ isOpen: false, idleMinutes: 10, remainingSeconds: 300 });
+      }
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'keyup', 'scroll', 'wheel', 'pointermove', 'touchstart', 'focus'];
+    events.forEach((evt) => {
+      window.addEventListener(evt, handleGlobalActivity, { capture: true, passive: true });
+    });
+
+    return () => {
+      events.forEach((evt) => {
+        window.removeEventListener(evt, handleGlobalActivity, { capture: true });
+      });
+    };
+  }, [inactivityAlertState.isOpen]);
 
   const [taskSwitchPending, setTaskSwitchPending] = useState<TaskSwitchPending | null>(null);
 
@@ -657,11 +698,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           geoLocalEndTime: getManilaTimeString(now),
           mouseActivityAvg: 95,
           keyboardActivityAvg: 90,
-          idleSeconds: 0,
+          idleSeconds: sessionIdleDeductionSeconds,
           date: todayStr,
           notes: `Completed task segment for ${completedTaskCategory}`,
           appsUsed: [],
         };
+        setSessionIdleDeductionSeconds(0);
         addTimeLog(completedLog);
       }
 
@@ -989,11 +1031,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       geoLocalEndTime: getManilaTimeString(now),
       mouseActivityAvg: 95,
       keyboardActivityAvg: 90,
-      idleSeconds: 0,
+      idleSeconds: sessionIdleDeductionSeconds,
       date: todayStr,
       notes: 'Logged via LLC-Time-Tracker-V2 Desktop Tracker',
       appsUsed: [],
     });
+    setSessionIdleDeductionSeconds(0);
 
     setIsTracking(false);
     setIsPaused(false);
@@ -1830,6 +1873,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setElapsedSeconds(elapsed);
       elapsedSecondsRef.current = elapsed;
 
+      // Evaluate per-agent Idle Tracking if enabled for current user
+      if (currentUserRef.current?.idleTrackingEnabled === true && !isPausedRef.current) {
+        const noInputDurationMs = now - lastUserActivityMsRef.current;
+        const isScreenHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
+        if (isScreenHidden) {
+          if (screenBlackoutStartMsRef.current === null) {
+            screenBlackoutStartMsRef.current = lastUserActivityMsRef.current;
+          }
+        } else {
+          screenBlackoutStartMsRef.current = null;
+        }
+
+        const is10mIdle = noInputDurationMs >= 10 * 60 * 1000;
+        const isBlackoutIdle = isScreenHidden && (now - (screenBlackoutStartMsRef.current || now) >= 5000);
+
+        if (is10mIdle || isBlackoutIdle) {
+          const idleStartMs = screenBlackoutStartMsRef.current || lastUserActivityMsRef.current;
+          const currentIdleSecs = Math.max(0, Math.floor((now - idleStartMs) / 1000));
+          setSessionIdleDeductionSeconds(currentIdleSecs);
+          setIsIdleAlertActive(true);
+          setInactivityAlertState((prev) => {
+            if (!prev.isOpen) {
+              return {
+                isOpen: true,
+                idleMinutes: Math.max(1, Math.floor(currentIdleSecs / 60)),
+                remainingSeconds: 300,
+              };
+            }
+            return prev;
+          });
+        }
+      }
+
       // 2-minute presence heartbeat (120,000 ms)
       if (!isPausedRef.current && now - lastHeartbeatEpochMsRef.current >= 120000) {
         lastHeartbeatEpochMsRef.current = now;
@@ -1876,7 +1953,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           geoLocalEndTime: getManilaTimeString(new Date(now)),
           mouseActivityAvg: 95,
           keyboardActivityAvg: 90,
-          idleSeconds: 0,
+          idleSeconds: sessionIdleDeductionSeconds,
           notes: 'Active task segment 10-minute sync',
           appsUsed: [],
         };
@@ -2007,6 +2084,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recordIdleInactivityEvent,
         simulateIdleEvent,
         restoreInactivityDeduction,
+        setBulkIdleTracking,
         isDualMonitorMode,
         toggleDualMonitorMode,
         storageEngineMode,

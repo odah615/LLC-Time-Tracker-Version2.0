@@ -154,9 +154,10 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
 
       // 2. Audit Log record
       addAuditLog({
+        actorId: currentUser.id,
         actorName: currentUser.name,
         actorRole: currentUser.role,
-        actionCategory: 'Timesheet Edit',
+        category: 'Timesheet Edit',
         details: `Updated timesheet for ${log.userName} (${log.employeeCode}): ${task} set to ${netFormattedString} (${netHoursFormatted} hrs). Note: ${reason}`,
       });
 

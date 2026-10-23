@@ -97,7 +97,7 @@ export const InactivityWarningModal: React.FC = () => {
               />
             </div>
             <p className="text-[11px] text-slate-400 pt-1">
-              Click <span className="text-emerald-300 font-semibold">"Yes, I'm Working"</span> to keep tracking with zero deduction. If unanswered in 5 mins, the desktop tracker will automatically log out and deduct 15 mins from your timesheet.
+              Click <span className="text-emerald-300 font-semibold">"Yes, I'm Working"</span> or simply move your mouse / type to automatically dismiss this notice and resume tracking.
             </p>
           </div>
 

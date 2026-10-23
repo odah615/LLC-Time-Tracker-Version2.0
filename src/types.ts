@@ -62,6 +62,7 @@ export interface User {
   stealthMonitored?: boolean; // Combined surveillance flag
   screenshotMonitored?: boolean; // Separate Screenshot Monitor toggle
   activityMonitored?: boolean; // Separate Activity Monitor toggle
+  idleTrackingEnabled?: boolean; // Separate Idle Detection toggle per agent
   isSecretBackup?: boolean; // Hidden emergency backup admin account (does not appear in public lists)
   password?: string; // Account password
   passwordHash?: string; // Secure PBKDF2 cryptographic hash stored on backend

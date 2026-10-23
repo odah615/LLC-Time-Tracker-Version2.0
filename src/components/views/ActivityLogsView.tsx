@@ -53,7 +53,41 @@ export const ActivityLogsView: React.FC = () => {
     updateUser,
     deleteScreenshot,
     toggleScreenshotBlur,
+    setBulkIdleTracking,
   } = useApp();
+
+  const handleToggleIdleTrackingPrompt = (usr: User, currentVal?: boolean) => {
+    const isCurrentlyOn = currentVal === true;
+    const fromVal = isCurrentlyOn ? 'Idle Detection ON' : 'Idle Detection OFF';
+    const toVal = !isCurrentlyOn ? 'Idle Detection ON' : 'Idle Detection OFF';
+    setConfirmModal({
+      isOpen: true,
+      title: 'Confirm Idle Detection Setting',
+      description: `Are you sure you want to turn ${isCurrentlyOn ? 'OFF' : 'ON'} 10-minute / screen-lock idle detection for ${usr.name}?`,
+      employeeName: usr.name,
+      employeeCode: usr.employeeCode,
+      fromValue: fromVal,
+      toValue: toVal,
+      confirmText: `Yes, Turn ${!isCurrentlyOn ? 'ON' : 'OFF'}`,
+      variant: 'warning',
+      action: () => {
+        updateUser(usr.id, { idleTrackingEnabled: !isCurrentlyOn });
+      },
+    });
+  };
+
+  const handleBulkIdlePrompt = (enable: boolean) => {
+    setConfirmModal({
+      isOpen: true,
+      title: `Confirm Bulk Idle Detection ${enable ? 'ENABLE' : 'DISABLE'}`,
+      description: `Are you sure you want to turn ${enable ? 'ON' : 'OFF'} idle detection for ALL staff members?`,
+      confirmText: `Yes, Turn ${enable ? 'ON' : 'OFF'} for All`,
+      variant: enable ? 'warning' : 'danger',
+      action: () => {
+        setBulkIdleTracking(enable);
+      },
+    });
+  };
 
   const todayStr = getManilaDateString();
   const [selectedImage, setSelectedImage] = useState<ScreenshotLog | null>(null);
@@ -336,9 +370,26 @@ export const ActivityLogsView: React.FC = () => {
                 Toggles for Screenshot Captures and Keyboard/Mouse Activity Monitoring.
               </p>
             </div>
-            <span className="text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1 rounded-lg">
-              Showing {paginatedSurveillanceUsers.length} of {users.length} Staff
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleBulkIdlePrompt(true)}
+                className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                <span>Turn ON Idle for ALL</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBulkIdlePrompt(false)}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Turn OFF Idle for ALL</span>
+              </button>
+              <span className="text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1 rounded-lg">
+                Showing {paginatedSurveillanceUsers.length} of {users.length} Staff
+              </span>
+            </div>
           </div>
           <div className="overflow-x-auto border border-slate-200 rounded-xl">
             <table className="w-full text-left text-xs">
@@ -348,6 +399,7 @@ export const ActivityLogsView: React.FC = () => {
                   <th className="py-3 px-4">Role & Designation</th>
                   <th className="py-3 px-4 text-center">Screenshot Monitoring</th>
                   <th className="py-3 px-4 text-center">Activity Monitoring</th>
+                  <th className="py-3 px-4 text-center">Idle Detection (10m / Screen Lock)</th>
                   <th className="py-3 px-4 text-right">Idle Time Tracked</th>
                 </tr>
               </thead>
@@ -355,6 +407,7 @@ export const ActivityLogsView: React.FC = () => {
                 {paginatedSurveillanceUsers.map((usr) => {
                   const isScreenshotOn = usr.screenshotMonitored === true;
                   const isActivityOn = usr.activityMonitored === true;
+                  const isIdleOn = usr.idleTrackingEnabled === true;
                   return (
                     <tr key={usr.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4">
@@ -391,6 +444,19 @@ export const ActivityLogsView: React.FC = () => {
                         >
                           <MousePointer className="w-3.5 h-3.5" />
                           <span>{isActivityOn ? 'Activity ON' : 'Activity OFF'}</span>
+                        </button>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <button
+                          onClick={() => handleToggleIdleTrackingPrompt(usr, isIdleOn)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                            isIdleOn
+                              ? 'bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 font-extrabold shadow-sm'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200'
+                          }`}
+                        >
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          <span>{isIdleOn ? 'Idle Detection ON' : 'Idle Detection OFF'}</span>
                         </button>
                       </td>
                       <td className="py-3 px-4 text-right">
