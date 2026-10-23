@@ -57,11 +57,41 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
   const idleFormatted = formatDurationDetailed(idleSeconds);
   const netFormatted = formatDurationDetailed(netSeconds);
 
+  const formatDisplayTime = (val?: string): string => {
+    if (!val) return '—';
+    const trimmed = String(val).trim();
+    if (!trimmed || trimmed === 'N/A' || trimmed === '—') return '—';
+    if (trimmed.includes('Progress') || trimmed.includes('Running')) return 'Running Live';
+
+    // If already clean time string like "12:24 PM" or "07:24:58 PM", return directly
+    if (/^\d{1,2}:\d{2}/.test(trimmed) && !trimmed.includes('T')) {
+      return trimmed;
+    }
+
+    try {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        });
+      }
+    } catch {}
+
+    return trimmed;
+  };
+
   const earliestLog = dayLogs[0];
   const latestLog = dayLogs[dayLogs.length - 1];
 
-  const firstClockIn = earliestLog?.geoLocalStartTime || earliestLog?.startTime || 'N/A';
-  const lastClockOut = latestLog?.geoLocalEndTime || latestLog?.endTime || 'N/A';
+  const firstClockIn = formatDisplayTime(earliestLog?.geoLocalStartTime || earliestLog?.startTime);
+  const lastClockOut = latestLog
+    ? (latestLog.status === 'running' || String(latestLog.endTime || '').includes('Progress') || String(latestLog.endTime || '').includes('Running')
+        ? 'Running Live'
+        : formatDisplayTime(latestLog?.geoLocalEndTime || latestLog?.endTime))
+    : '—';
 
   const avgActivity = Math.round(
     dayLogs.length > 0
@@ -88,8 +118,8 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
       txt += `No recorded activity segments found for this date.\n`;
     } else {
       dayLogs.forEach((l, idx) => {
-        const start = l.geoLocalStartTime || l.startTime || 'N/A';
-        const end = l.geoLocalEndTime || l.endTime || 'In Progress';
+        const start = formatDisplayTime(l.geoLocalStartTime || l.startTime);
+        const end = l.status === 'running' || String(l.endTime || '').includes('Progress') ? 'Running Live' : formatDisplayTime(l.geoLocalEndTime || l.endTime);
         const dur = formatDurationDetailed(l.durationSeconds);
         txt += `${idx + 1}. [${start} - ${end}] ${l.task} → ${dur} (Idle: ${Math.round((l.idleSeconds || 0) / 60)}m)\n`;
       });
@@ -109,7 +139,7 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-md p-3 sm:p-4 overflow-hidden">
-      <div className="bg-white border border-slate-200 rounded-3xl max-w-2xl w-full max-h-[88vh] sm:max-h-[90vh] flex flex-col p-5 sm:p-6 shadow-2xl text-slate-800 animate-in fade-in zoom-in-95 duration-150 my-auto">
+      <div className="bg-white border border-slate-200 rounded-3xl max-w-3xl w-full max-h-[88vh] sm:max-h-[90vh] flex flex-col p-4 sm:p-6 shadow-2xl text-slate-800 animate-in fade-in zoom-in-95 duration-150 my-auto">
         {/* Modal Header */}
         <div className="shrink-0 flex items-center justify-between pb-3 border-b border-slate-200">
           <div className="flex items-center gap-3">
@@ -137,7 +167,7 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
         {/* Scrollable Modal Body */}
         <div className="flex-1 overflow-y-auto py-3 space-y-4 pr-1">
           {/* Employee Banner */}
-          <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Employee Profile</span>
               <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -158,25 +188,25 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
           </div>
 
         {/* Summary Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-5">
-          <div className="p-3 bg-blue-50/60 border border-blue-200/60 rounded-xl text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 my-3">
+          <div className="p-2.5 bg-blue-50/60 border border-blue-200/60 rounded-xl text-center">
             <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">First Clock-In</span>
-            <span className="text-sm font-extrabold text-slate-900 font-mono block mt-0.5">{firstClockIn}</span>
+            <span className="text-xs sm:text-sm font-extrabold text-slate-900 font-mono block mt-0.5">{firstClockIn}</span>
           </div>
 
-          <div className="p-3 bg-purple-50/60 border border-purple-200/60 rounded-xl text-center">
+          <div className="p-2.5 bg-purple-50/60 border border-purple-200/60 rounded-xl text-center">
             <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wider block">Last Clock-Out</span>
-            <span className="text-sm font-extrabold text-slate-900 font-mono block mt-0.5">{lastClockOut}</span>
+            <span className="text-xs sm:text-sm font-extrabold text-slate-900 font-mono block mt-0.5">{lastClockOut}</span>
           </div>
 
-          <div className="p-3 bg-amber-50/60 border border-amber-200/60 rounded-xl text-center">
+          <div className="p-2.5 bg-amber-50/60 border border-amber-200/60 rounded-xl text-center">
             <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider block">Idle / Break Deductions</span>
-            <span className="text-sm font-extrabold text-amber-700 font-mono block mt-0.5">{idleFormatted}</span>
+            <span className="text-xs sm:text-sm font-extrabold text-amber-700 font-mono block mt-0.5">{idleFormatted}</span>
           </div>
 
-          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-center">
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-center">
             <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Net Rendered Time</span>
-            <span className="text-sm font-black text-emerald-700 font-mono block mt-0.5">{netFormatted}</span>
+            <span className="text-xs sm:text-sm font-black text-emerald-700 font-mono block mt-0.5">{netFormatted}</span>
           </div>
         </div>
 
@@ -192,7 +222,7 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
             </span>
           </div>
 
-          <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-56 overflow-y-auto">
+          <div className="border border-slate-200 rounded-2xl overflow-hidden">
             {dayLogs.length === 0 ? (
               <div className="p-6 text-center text-slate-400 text-xs">
                 No shift logs found for this agent on {dateStr}.
@@ -201,17 +231,17 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-100 text-slate-600 font-bold text-[10px] uppercase tracking-wider border-b border-slate-200">
                   <tr>
-                    <th className="py-2.5 px-3">#</th>
-                    <th className="py-2.5 px-3">Time Window</th>
-                    <th className="py-2.5 px-3">Task Category</th>
-                    <th className="py-2.5 px-3 text-right">Gross Duration</th>
-                    <th className="py-2.5 px-3 text-right">Idle Deducted</th>
+                    <th className="py-2 px-3 w-8">#</th>
+                    <th className="py-2 px-3">Time Window</th>
+                    <th className="py-2 px-3">Task Category</th>
+                    <th className="py-2 px-3 text-right">Gross Duration</th>
+                    <th className="py-2 px-3 text-right">Idle Deducted</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-slate-700">
                   {dayLogs.map((l, idx) => {
-                    const start = l.geoLocalStartTime || l.startTime || 'N/A';
-                    const end = l.geoLocalEndTime || l.endTime || 'In Progress';
+                    const start = formatDisplayTime(l.geoLocalStartTime || l.startTime);
+                    const end = l.status === 'running' || String(l.endTime || '').includes('Progress') ? 'Running Live' : formatDisplayTime(l.geoLocalEndTime || l.endTime);
                     const dur = formatDurationDetailed(l.durationSeconds);
                     const idleMin = Math.round((l.idleSeconds || 0) / 60);
 
@@ -222,8 +252,8 @@ export const ShiftProofModal: React.FC<ShiftProofModalProps> = ({
                           {start} – {end}
                         </td>
                         <td className="py-2 px-3 font-medium text-slate-800">{l.task}</td>
-                        <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">{dur}</td>
-                        <td className="py-2 px-3 text-right font-mono text-amber-600 font-semibold">
+                        <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 whitespace-nowrap">{dur}</td>
+                        <td className="py-2 px-3 text-right font-mono text-amber-600 font-semibold whitespace-nowrap">
                           {idleMin > 0 ? `${idleMin}m` : '0m'}
                         </td>
                       </tr>

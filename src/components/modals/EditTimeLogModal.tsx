@@ -19,7 +19,7 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
   const [endTime, setEndTime] = useState<string>('11:00');
   const [idleMinutes, setIdleMinutes] = useState<number>(0);
   const [task, setTask] = useState<TaskCategory>('Data Entry & Market Research');
-  const [reason, setReason] = useState<string>('Approved by Team Lead - Data entry proof verified');
+  const [reason, setReason] = useState<string>('Admin Approval - Proof Verified by Team Lead');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
@@ -89,7 +89,7 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
       setTargetMinutes(Math.floor((durSec % 3600) / 60));
       setTargetSeconds(durSec % 60);
 
-      setReason('Approved by Team Lead - Data entry proof verified');
+      setReason('Admin Approval - Proof Verified by Team Lead');
     }
   }, [log]);
 
