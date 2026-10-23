@@ -16,7 +16,7 @@ import {
   ListFilter,
   PieChart as PieIcon,
   Search,
-  User,
+  User as UserIcon,
   ShieldCheck,
   X,
   Users,
@@ -30,6 +30,8 @@ import {
   AlertTriangle,
   Code,
   Download,
+  FileCheck2,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   BarChart,
@@ -42,17 +44,18 @@ import {
   Legend,
 } from 'recharts';
 import { TASK_LIST } from '../../data/initialData';
-import { TimeLog } from '../../types';
+import type { TimeLog, User } from '../../types';
 import { UserAvatar } from '../UserAvatar';
 import { resolveCanonicalEmployee } from '../../lib/userUtils';
 import { EditTimeLogModal } from '../modals/EditTimeLogModal';
+import { ShiftProofModal } from '../modals/ShiftProofModal';
 
 interface TimesheetViewProps {
   onOpenManualModal: () => void;
   isPersonalOnly?: boolean;
 }
 
-type ViewTabMode = 'daily' | 'weekly' | 'monthly' | 'summary';
+type ViewTabMode = 'daily' | 'weekly' | 'monthly' | 'summary' | 'unclosed';
 
 export const TimesheetView: React.FC<TimesheetViewProps> = ({
   onOpenManualModal,
@@ -87,6 +90,16 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
   const [webhookInputVal, setWebhookInputVal] = useState(googleSheetsWebhookUrl || '');
   const [copiedScript, setCopiedScript] = useState(false);
   const [editingLog, setEditingLog] = useState<TimeLog | null>(null);
+
+  const [proofModalState, setProofModalState] = useState<{
+    isOpen: boolean;
+    targetUser: Partial<User> | null;
+    dateStr: string;
+  }>({
+    isOpen: false,
+    targetUser: null,
+    dateStr: getManilaDateString(),
+  });
 
   useEffect(() => {
     setWebhookInputVal(googleSheetsWebhookUrl || '');
@@ -909,7 +922,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
               {isPersonalView ? (
                 <>
-                  <User className="w-6 h-6 text-emerald-600" /> My Personal Timesheet
+                  <UserIcon className="w-6 h-6 text-emerald-600" /> My Personal Timesheet
                 </>
               ) : (
                 <>
@@ -1146,16 +1159,28 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
               Monthly View
             </button>
             {!isPersonalView && (
-              <button
-                onClick={() => handleTabSwitch('summary')}
-                className={`px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                  viewTab === 'summary'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Daily Summary (Spreadsheet)
-              </button>
+              <>
+                <button
+                  onClick={() => handleTabSwitch('summary')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    viewTab === 'summary'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Daily Summary (Spreadsheet)
+                </button>
+                <button
+                  onClick={() => handleTabSwitch('unclosed')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    viewTab === 'unclosed'
+                      ? 'bg-amber-600 text-white shadow-sm font-black'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Unclosed / Interrupted Shifts
+                </button>
+              </>
             )}
           </div>
 
@@ -1444,6 +1469,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                     <th className="py-3 px-4">Avg Activity</th>
                     <th className="py-3 px-4">Shift Status</th>
                     <th className="py-3 px-4">Logs</th>
+                    <th className="py-3 px-4 text-center">Audit Certificate</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -1481,6 +1507,26 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-4 font-mono text-center font-semibold text-slate-600">{row.logEntries}</td>
+                      <td className="py-3 px-4 text-center">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setProofModalState({
+                              isOpen: true,
+                              targetUser: {
+                                name: row.employeeName,
+                                employeeCode: row.employeeCode,
+                                designation: row.designation,
+                              },
+                              dateStr: row.date,
+                            })
+                          }
+                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer shadow-2xs"
+                        >
+                          <FileCheck2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Shift Proof</span>
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1613,6 +1659,27 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                                 onClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
+                                  setProofModalState({
+                                    isOpen: true,
+                                    targetUser: {
+                                      name: log.userName,
+                                      employeeCode: log.employeeCode,
+                                      designation: log.designation,
+                                      id: log.userId,
+                                    },
+                                    dateStr: log.date || getManilaDateString(),
+                                  });
+                                }}
+                                className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-all cursor-pointer flex items-center gap-1 text-xs font-bold"
+                                title="Generate Shift Proof Certificate"
+                              >
+                                <FileCheck2 className="w-3.5 h-3.5 text-emerald-600" />
+                                <span className="hidden sm:inline">Proof</span>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
                                   setEditingLog(log);
                                 }}
                                 className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 transition-all cursor-pointer"
@@ -1646,10 +1713,101 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
         </div>
       )}
 
+      {viewTab === 'unclosed' && (
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm space-y-4">
+          <div className="p-4 bg-amber-50/80 border-b border-amber-200/80 flex items-center justify-between">
+            <div>
+              <h4 className="font-bold text-xs text-amber-900 uppercase tracking-wider flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-amber-600" />
+                Unclosed & Interrupted Shift Checkpoints ({timeLogs.filter((l) => l.status === 'running' || l.endTime === 'In Progress (10m Sync)').length})
+              </h4>
+              <p className="text-[11px] text-amber-700 mt-0.5">
+                Active or unclosed shift logs from abrupt shutdowns, connection loss, or unclosed browser sessions.
+              </p>
+            </div>
+          </div>
+
+          {timeLogs.filter((l) => l.status === 'running' || l.endTime === 'In Progress (10m Sync)').length === 0 ? (
+            <div className="text-center py-10 text-slate-500 text-xs">
+              <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
+              No unclosed or interrupted shifts found. All agent shifts are cleanly finalized.
+            </div>
+          ) : (
+            <div className="overflow-x-auto p-4">
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead className="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                  <tr>
+                    <th className="py-3 px-4">Employee</th>
+                    <th className="py-3 px-4">Designation</th>
+                    <th className="py-3 px-4">Interrupted Task</th>
+                    <th className="py-3 px-4">Start Time</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-amber-800">Unclosed Duration</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {timeLogs
+                    .filter((l) => l.status === 'running' || l.endTime === 'In Progress (10m Sync)')
+                    .map((session) => {
+                      const durSec = session.durationSeconds || 0;
+                      const durFormatted = formatTotalTime(durSec);
+                      return (
+                        <tr key={session.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900">{session.userName}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">{session.employeeCode}</div>
+                          </td>
+                          <td className="py-3 px-4 text-slate-600 font-medium">{session.designation}</td>
+                          <td className="py-3 px-4 font-semibold text-blue-700">{session.task}</td>
+                          <td className="py-3 px-4 font-mono text-slate-700">{session.geoLocalStartTime || session.startTime || 'N/A'}</td>
+                          <td className="py-3 px-4 font-mono text-amber-700 font-semibold">{session.date} • Running/Interrupted</td>
+                          <td className="py-3 px-4 font-mono font-black text-amber-700">
+                            <span className="bg-amber-50 text-amber-900 border border-amber-300 px-2 py-0.5 rounded font-mono font-bold">
+                              {durFormatted} ({Math.round(durSec / 60)} mins)
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setEditingLog(session)}
+                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>Review & Finalize</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteTimeLog(session.id)}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-red-100 text-slate-600 hover:text-red-700 rounded-xl font-bold text-xs transition-all cursor-pointer"
+                              >
+                                Discard
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       <EditTimeLogModal
         isOpen={Boolean(editingLog)}
         onClose={() => setEditingLog(null)}
         log={editingLog}
+      />
+
+      <ShiftProofModal
+        isOpen={proofModalState.isOpen}
+        onClose={() => setProofModalState({ ...proofModalState, isOpen: false })}
+        targetUser={proofModalState.targetUser}
+        dateStr={proofModalState.dateStr}
+        logs={timeLogs}
       />
     </div>
   );

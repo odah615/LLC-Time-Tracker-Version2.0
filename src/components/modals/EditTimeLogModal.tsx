@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TASK_LIST } from '../../data/initialData';
-import { TaskCategory, TimeLog } from '../../types';
+import type { TaskCategory, TimeLog } from '../../types';
 import { Clock, X, Check, ShieldCheck, AlertCircle, Edit3, Sparkles } from 'lucide-react';
 import { getManilaIsoString, formatDurationDetailed } from '../../lib/dateUtils';
 
@@ -23,12 +23,19 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
+  const [targetHours, setTargetHours] = useState<number>(0);
+  const [targetMinutes, setTargetMinutes] = useState<number>(0);
+  const [targetSeconds, setTargetSeconds] = useState<number>(0);
+
   // Sync modal form state whenever active log changes
   useEffect(() => {
     if (log) {
       setDate(log.date || new Date().toISOString().split('T')[0]);
       setTask(log.task || 'Data Entry & Market Research');
       setIdleMinutes(Math.round((log.idleSeconds || 0) / 60));
+
+      let startFormatted = '08:00';
+      let endFormatted = '11:00';
 
       // Extract time part from startTime/endTime ISO strings or local formatted strings
       if (log.startTime) {
@@ -37,12 +44,12 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
           if (!isNaN(d.getTime())) {
             const hh = String(d.getHours()).padStart(2, '0');
             const mm = String(d.getMinutes()).padStart(2, '0');
-            setStartTime(`${hh}:${mm}`);
+            startFormatted = `${hh}:${mm}`;
           } else if (log.geoLocalStartTime && /^\d{1,2}:\d{2}/.test(log.geoLocalStartTime)) {
-            setStartTime(log.geoLocalStartTime.slice(0, 5));
+            startFormatted = log.geoLocalStartTime.slice(0, 5);
           }
         } catch {
-          setStartTime('08:00');
+          startFormatted = '08:00';
         }
       }
 
@@ -52,15 +59,14 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
           if (!isNaN(d.getTime())) {
             const hh = String(d.getHours()).padStart(2, '0');
             const mm = String(d.getMinutes()).padStart(2, '0');
-            setEndTime(`${hh}:${mm}`);
+            endFormatted = `${hh}:${mm}`;
           } else if (log.geoLocalEndTime && /^\d{1,2}:\d{2}/.test(log.geoLocalEndTime)) {
-            setEndTime(log.geoLocalEndTime.slice(0, 5));
+            endFormatted = log.geoLocalEndTime.slice(0, 5);
           }
         } catch {
-          setEndTime('11:00');
+          endFormatted = '11:00';
         }
       } else {
-        // Fallback end time calculated from durationSeconds
         if (log.startTime && log.durationSeconds) {
           try {
             const dStart = new Date(log.startTime);
@@ -68,11 +74,21 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
               const dEnd = new Date(dStart.getTime() + (log.durationSeconds * 1000));
               const hh = String(dEnd.getHours()).padStart(2, '0');
               const mm = String(dEnd.getMinutes()).padStart(2, '0');
-              setEndTime(`${hh}:${mm}`);
+              endFormatted = `${hh}:${mm}`;
             }
           } catch {}
         }
       }
+
+      setStartTime(startFormatted);
+      setEndTime(endFormatted);
+
+      // Populate initial target duration HH:MM:SS
+      const durSec = log.durationSeconds || 3600;
+      setTargetHours(Math.floor(durSec / 3600));
+      setTargetMinutes(Math.floor((durSec % 3600) / 60));
+      setTargetSeconds(durSec % 60);
+
       setReason('Approved by Team Lead - Data entry proof verified');
     }
   }, [log]);
@@ -85,36 +101,89 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
     designation: log.designation,
   };
 
-  // Quick Preset Helper: Set duration directly (e.g., 1h, 2h, 3h, 4h, 8h)
-  const setQuickDuration = (hours: number) => {
+  // Update End Time based on Start Time + Target Duration (HH:MM:SS)
+  const applyDurationToEndTime = (h: number, m: number, s: number) => {
     try {
       const [sh, sm] = startTime.split(':').map(Number);
-      let endMins = (sh * 60 + sm) + (hours * 60);
-      endMins = endMins % (24 * 60);
-      const eh = String(Math.floor(endMins / 60)).padStart(2, '0');
-      const em = String(endMins % 60).padStart(2, '0');
+      const totalStartSecs = (sh * 60 + sm) * 60;
+      const targetSecs = h * 3600 + m * 60 + s;
+      let totalEndSecs = (totalStartSecs + targetSecs) % (24 * 3600);
+      const eh = String(Math.floor(totalEndSecs / 3600)).padStart(2, '0');
+      const em = String(Math.floor((totalEndSecs % 3600) / 60)).padStart(2, '0');
       setEndTime(`${eh}:${em}`);
     } catch {}
   };
 
-  const calculateGrossDurationSeconds = (): number => {
+  const handleTargetHoursChange = (val: number) => {
+    const h = Math.max(0, val);
+    setTargetHours(h);
+    applyDurationToEndTime(h, targetMinutes, targetSeconds);
+  };
+
+  const handleTargetMinutesChange = (val: number) => {
+    const m = Math.max(0, Math.min(59, val));
+    setTargetMinutes(m);
+    applyDurationToEndTime(targetHours, m, targetSeconds);
+  };
+
+  const handleTargetSecondsChange = (val: number) => {
+    const s = Math.max(0, Math.min(59, val));
+    setTargetSeconds(s);
+    applyDurationToEndTime(targetHours, targetMinutes, s);
+  };
+
+  // Quick Preset Helper: Set duration directly (e.g., 1h, 2h, 3h, 4h, 8h)
+  const setQuickDuration = (hours: number) => {
+    setTargetHours(hours);
+    setTargetMinutes(0);
+    setTargetSeconds(0);
+    applyDurationToEndTime(hours, 0, 0);
+  };
+
+  // Step Start/End time up or down by delta minutes
+  const stepTime = (target: 'start' | 'end', deltaMinutes: number) => {
     try {
-      const [sh, sm] = startTime.split(':').map(Number);
-      const [eh, em] = endTime.split(':').map(Number);
-      let startMins = sh * 60 + sm;
-      let endMins = eh * 60 + em;
-      if (endMins < startMins) {
-        endMins += 24 * 60; // Overnight shift
+      const currentVal = target === 'start' ? startTime : endTime;
+      const [h, m] = currentVal.split(':').map(Number);
+      let totalMins = (h * 60 + m) + deltaMinutes;
+      if (totalMins < 0) totalMins += 24 * 60;
+      totalMins = totalMins % (24 * 60);
+      const newH = String(Math.floor(totalMins / 60)).padStart(2, '0');
+      const newM = String(totalMins % 60).padStart(2, '0');
+      const newTimeStr = `${newH}:${newM}`;
+
+      if (target === 'start') {
+        setStartTime(newTimeStr);
+        // Recalculate duration HH:MM:SS based on new start time and existing end time
+        const [eh, em] = endTime.split(':').map(Number);
+        let sSec = totalMins * 60;
+        let eSec = (eh * 60 + em) * 60;
+        if (eSec < sSec) eSec += 24 * 3600;
+        const diff = Math.max(60, eSec - sSec);
+        setTargetHours(Math.floor(diff / 3600));
+        setTargetMinutes(Math.floor((diff % 3600) / 60));
+        setTargetSeconds(diff % 60);
+      } else {
+        setEndTime(newTimeStr);
+        // Recalculate duration HH:MM:SS
+        const [sh, sm] = startTime.split(':').map(Number);
+        let sSec = (sh * 60 + sm) * 60;
+        let eSec = totalMins * 60;
+        if (eSec < sSec) eSec += 24 * 3600;
+        const diff = Math.max(60, eSec - sSec);
+        setTargetHours(Math.floor(diff / 3600));
+        setTargetMinutes(Math.floor((diff % 3600) / 60));
+        setTargetSeconds(diff % 60);
       }
-      const diffSecs = Math.max((endMins - startMins) * 60, 60);
-      return diffSecs;
-    } catch {
-      return log.durationSeconds || 3600;
-    }
+    } catch {}
+  };
+
+  const calculateGrossDurationSeconds = (): number => {
+    return targetHours * 3600 + targetMinutes * 60 + targetSeconds;
   };
 
   const grossDurationSec = calculateGrossDurationSeconds();
-  const netDurationSec = Math.max(grossDurationSec - Math.max(Number(idleMinutes) || 0, 0) * 60, 60);
+  const netDurationSec = Math.max(grossDurationSec - Math.max(Number(idleMinutes) || 0, 0) * 60, 0);
 
   const grossHoursFormatted = (grossDurationSec / 3600).toFixed(2);
   const netHoursFormatted = (netDurationSec / 3600).toFixed(2);
@@ -246,29 +315,171 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
             />
           </div>
 
-          {/* Start Time & End Time */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Start Time & End Time with Stepper Controls */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-                Start Time
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Start Time
+                </label>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => stepTime('start', -60)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    -1h
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTime('start', -15)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    -15m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTime('start', 15)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    +15m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTime('start', 60)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    +1h
+                  </button>
+                </div>
+              </div>
               <input
                 type="time"
                 value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                onChange={(e) => {
+                  setStartTime(e.target.value);
+                  try {
+                    const [sh, sm] = e.target.value.split(':').map(Number);
+                    const [eh, em] = endTime.split(':').map(Number);
+                    let sSec = (sh * 60 + sm) * 60;
+                    let eSec = (eh * 60 + em) * 60;
+                    if (eSec < sSec) eSec += 24 * 3600;
+                    const diff = Math.max(60, eSec - sSec);
+                    setTargetHours(Math.floor(diff / 3600));
+                    setTargetMinutes(Math.floor((diff % 3600) / 60));
+                    setTargetSeconds(diff % 60);
+                  } catch {}
+                }}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono font-bold"
               />
             </div>
+
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-                End Time
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                  End Time
+                </label>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => stepTime('end', -60)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    -1h
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTime('end', -15)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    -15m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTime('end', 15)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    +15m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTime('end', 60)}
+                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-slate-700"
+                  >
+                    +1h
+                  </button>
+                </div>
+              </div>
               <input
                 type="time"
                 value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                onChange={(e) => {
+                  setEndTime(e.target.value);
+                  try {
+                    const [sh, sm] = startTime.split(':').map(Number);
+                    const [eh, em] = e.target.value.split(':').map(Number);
+                    let sSec = (sh * 60 + sm) * 60;
+                    let eSec = (eh * 60 + em) * 60;
+                    if (eSec < sSec) eSec += 24 * 3600;
+                    const diff = Math.max(60, eSec - sSec);
+                    setTargetHours(Math.floor(diff / 3600));
+                    setTargetMinutes(Math.floor((diff % 3600) / 60));
+                    setTargetSeconds(diff % 60);
+                  } catch {}
+                }}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono font-bold"
               />
+            </div>
+          </div>
+
+          {/* Exact Target Duration Input (HH : MM : SS) */}
+          <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-extrabold uppercase tracking-wider text-indigo-900 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                Target Duration Adjustment (HH : MM : SS)
+              </label>
+              <span className="text-[11px] font-semibold text-indigo-600">
+                Adjusts End Time Automatically
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-indigo-700 mb-1">Hours</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="24"
+                  value={targetHours}
+                  onChange={(e) => handleTargetHoursChange(parseInt(e.target.value, 10) || 0)}
+                  className="w-full px-3 py-2 bg-white border border-indigo-300 rounded-xl font-mono font-bold text-center text-sm text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-indigo-700 mb-1">Minutes</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="59"
+                  value={targetMinutes}
+                  onChange={(e) => handleTargetMinutesChange(parseInt(e.target.value, 10) || 0)}
+                  className="w-full px-3 py-2 bg-white border border-indigo-300 rounded-xl font-mono font-bold text-center text-sm text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-indigo-700 mb-1">Seconds</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="59"
+                  value={targetSeconds}
+                  onChange={(e) => handleTargetSecondsChange(parseInt(e.target.value, 10) || 0)}
+                  className="w-full px-3 py-2 bg-white border border-indigo-300 rounded-xl font-mono font-bold text-center text-sm text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
             </div>
           </div>
 
@@ -276,9 +487,6 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Quick Duration Presets</span>
-              <span className="text-xs text-indigo-600 font-semibold flex items-center gap-1">
-                <Sparkles className="w-3 h-3" /> Auto-calculates End Time
-              </span>
             </div>
             <div className="grid grid-cols-5 gap-1.5">
               {[1, 2, 3, 4, 8].map((hrs) => (
@@ -286,7 +494,7 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
                   key={hrs}
                   type="button"
                   onClick={() => setQuickDuration(hrs)}
-                  className="py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-lg transition-colors text-center"
+                  className="py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-lg transition-colors text-center cursor-pointer"
                 >
                   {hrs} Hours
                 </button>
