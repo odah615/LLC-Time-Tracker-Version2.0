@@ -1377,9 +1377,21 @@ function handlePost_(e) {
           var rowId = String(existingData[uI][0] || "").trim();
           var rowCode = String(existingData[uI][1] || "").trim().toUpperCase();
           var rowDate = normalizeLogDate_(existingData[uI][5]);
+          var rowTask = String(existingData[uI][14] || "").trim();
+          var rowStart = String(existingData[uI][6] || "").trim();
 
-          var isMatch = (targetId && (rowId.toLowerCase() === targetId.toLowerCase() || targetId.toLowerCase().indexOf(rowId.toLowerCase()) !== -1)) ||
-                        (empCode && rowCode === empCode && rowDate === workDate);
+          var isIdMatch = Boolean(targetId) && (
+            rowId.toLowerCase() === targetId.toLowerCase() ||
+            targetId.toLowerCase().indexOf(rowId.toLowerCase()) !== -1 ||
+            rowId.toLowerCase().indexOf(targetId.toLowerCase()) !== -1
+          );
+
+          var isMultiCriteriaMatch = Boolean(empCode && workDate) && (rowCode === empCode && rowDate === workDate) && (
+            (!newTask || rowTask.toLowerCase() === newTask.toLowerCase() || rowTask.toLowerCase().indexOf(newTask.toLowerCase()) !== -1) &&
+            (!newStart || rowStart === newStart || rowStart.indexOf(newStart) !== -1 || newStart.indexOf(rowStart) !== -1)
+          );
+
+          var isMatch = isIdMatch || isMultiCriteriaMatch;
 
           if (isMatch) {
             var rowNum = uI + 2;
