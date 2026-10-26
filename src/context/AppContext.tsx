@@ -337,7 +337,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const res = await fetchEmployeesFromGoogleSheets();
         if (res.success && res.employees && res.employees.length > 0) {
-          const merged = deduplicateUsers(ensureUsernames([...res.employees, ...users]));
+          const existingMap = new Map(users.map((u) => [u.id || u.employeeCode, u]));
+          const mergedEmployees = res.employees.map((emp) => {
+            const existing = existingMap.get(emp.id) || existingMap.get(emp.employeeCode);
+            if (existing) {
+              return {
+                ...existing,
+                ...emp,
+                idleTrackingEnabled: existing.idleTrackingEnabled ?? emp.idleTrackingEnabled ?? false,
+              };
+            }
+            return emp;
+          });
+          const merged = deduplicateUsers(ensureUsernames([...mergedEmployees, ...users]));
           setUsers(merged);
           localStorage.setItem('trackpulse_users', JSON.stringify(merged));
         }
@@ -613,15 +625,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setBulkIdleTracking = (enabled: boolean) => {
-    setUsers((prev) => {
-      const updated = prev.map((u) => ({ ...u, idleTrackingEnabled: enabled }));
-      localStorage.setItem('trackpulse_users', JSON.stringify(updated));
-      return updated;
+    const updatedUsers = users.map((u) => ({ ...u, idleTrackingEnabled: enabled }));
+    setUsers(updatedUsers);
+    localStorage.setItem('trackpulse_users', JSON.stringify(updatedUsers));
+
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      const updatedCurr = { ...prev, idleTrackingEnabled: enabled };
+      localStorage.setItem('trackpulse_current_user', JSON.stringify(updatedCurr));
+      return updatedCurr;
     });
+
     fetch('/api/users', {
       method: 'POST',
       headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(users.map((u) => ({ ...u, idleTrackingEnabled: enabled }))),
+      body: JSON.stringify(updatedUsers),
     }).catch(() => {});
   };
 
@@ -1313,7 +1331,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const res = await fetchEmployeesFromGoogleSheets();
       if (res.success && res.employees && res.employees.length > 0) {
-        const merged = deduplicateUsers(ensureUsernames(res.employees));
+        const existingMap = new Map(users.map((u) => [u.id || u.employeeCode, u]));
+        const mergedEmployees = res.employees.map((emp) => {
+          const existing = existingMap.get(emp.id) || existingMap.get(emp.employeeCode);
+          if (existing) {
+            return {
+              ...existing,
+              ...emp,
+              idleTrackingEnabled: existing.idleTrackingEnabled ?? emp.idleTrackingEnabled ?? false,
+            };
+          }
+          return emp;
+        });
+        const merged = deduplicateUsers(ensureUsernames([...mergedEmployees, ...users]));
         setUsers(merged);
         localStorage.setItem('trackpulse_users', JSON.stringify(merged));
         return { success: true, count: merged.length, message: res.message };
@@ -1480,6 +1510,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('trackpulse_users', JSON.stringify(deduped));
       return deduped;
     });
+
+    if (
+      currentUser &&
+      (currentUser.id === id ||
+        currentUser.employeeCode === id ||
+        (currentUser.username && currentUser.username.toLowerCase() === id.toLowerCase()))
+    ) {
+      setCurrentUser((prev) => {
+        const updatedCurr = { ...prev, ...data };
+        localStorage.setItem('trackpulse_current_user', JSON.stringify(updatedCurr));
+        return updatedCurr;
+      });
+    }
 
     if (targetUser) {
       const userToSave: User = targetUser;
