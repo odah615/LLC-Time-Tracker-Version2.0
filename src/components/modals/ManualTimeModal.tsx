@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TASK_LIST } from '../../data/initialData';
-import { TaskCategory, TimeLog } from '../../types';
-import { Clock, X, Check, UserCheck, ShieldCheck, Coffee, FileSpreadsheet, AlertCircle } from 'lucide-react';
+import { TaskCategory, TimeLog, User } from '../../types';
+import { Clock, X, Check, UserCheck, ShieldCheck, Coffee, FileSpreadsheet, AlertCircle, Search, ChevronDown, User as UserIcon } from 'lucide-react';
 import { getManilaIsoString } from '../../lib/dateUtils';
 
 interface ManualTimeModalProps {
@@ -27,9 +27,14 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
     currentUser?.name?.toLowerCase().includes('pia');
 
   const [targetUserId, setTargetUserId] = useState(currentUser?.id || '');
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
+  const [isEmployeeDropdownOpen, setIsEmployeeDropdownOpen] = useState(false);
+  const employeeDropdownRef = useRef<HTMLDivElement>(null);
+
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('17:00');
+  const [hoursToAdd, setHoursToAdd] = useState('8');
   const [breakMinutes, setBreakMinutes] = useState(60);
   const [task, setTask] = useState<TaskCategory>('Data Entry & Market Research');
   const [reason, setReason] = useState(
@@ -38,9 +43,103 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
+  const targetUser = users.find((u) => u.id === targetUserId) || currentUser;
+
+  // Initialize selected target user search display
+  useEffect(() => {
+    if (targetUser) {
+      const codeLabel = targetUser.employeeCode ? `[${targetUser.employeeCode}] ` : '';
+      setEmployeeSearchQuery(`${codeLabel}${targetUser.name} — (${targetUser.designation || targetUser.role})`);
+    }
+  }, [targetUserId]);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (employeeDropdownRef.current && !employeeDropdownRef.current.contains(event.target as Node)) {
+        setIsEmployeeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   if (!isOpen) return null;
 
-  const targetUser = users.find((u) => u.id === targetUserId) || currentUser;
+  // Filtered employees list based on search query
+  const filteredUsers = users.filter((u) => {
+    const q = employeeSearchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const nameMatch = (u.name || '').toLowerCase().includes(q);
+    const codeMatch = (u.employeeCode || '').toLowerCase().includes(q);
+    const desigMatch = (u.designation || '').toLowerCase().includes(q);
+    const roleMatch = (u.role || '').toLowerCase().includes(q);
+    const userMatch = (u.username || '').toLowerCase().includes(q);
+    return nameMatch || codeMatch || desigMatch || roleMatch || userMatch;
+  });
+
+  // Calculate End Time given Start Time + Shift Hours + Break Minutes
+  const calcEndTime = (startStr: string, hrsVal: string | number, breakMins: number): string => {
+    const hrs = parseFloat(String(hrsVal));
+    if (isNaN(hrs) || hrs <= 0) return endTime;
+    try {
+      const [sh, sm] = startStr.split(':').map(Number);
+      if (isNaN(sh) || isNaN(sm)) return endTime;
+      const startTotalMins = sh * 60 + sm;
+      const totalAddMins = Math.round(hrs * 60) + Math.max(0, Number(breakMins) || 0);
+      const endTotalMins = (startTotalMins + totalAddMins) % (24 * 60);
+      const eh = Math.floor(endTotalMins / 60);
+      const em = endTotalMins % 60;
+      return `${eh.toString().padStart(2, '0')}:${em.toString().padStart(2, '0')}`;
+    } catch {
+      return endTime;
+    }
+  };
+
+  // Calculate Shift Hours given Start Time and End Time and Break Minutes
+  const calcHoursFromTimes = (startStr: string, endStr: string, breakMins: number): string => {
+    try {
+      const [sh, sm] = startStr.split(':').map(Number);
+      const [eh, em] = endStr.split(':').map(Number);
+      let startTotalMins = sh * 60 + sm;
+      let endTotalMins = eh * 60 + em;
+      if (endTotalMins < startTotalMins) {
+        endTotalMins += 24 * 60;
+      }
+      const grossMins = Math.max(0, endTotalMins - startTotalMins);
+      const netMins = Math.max(0, grossMins - Math.max(0, Number(breakMins) || 0));
+      const hoursNum = netMins / 60;
+      return hoursNum.toFixed(2).replace(/\.00$/, '');
+    } catch {
+      return '8';
+    }
+  };
+
+  // Handlers for dynamic auto-calculations
+  const handleHoursChange = (val: string) => {
+    setHoursToAdd(val);
+    const newEnd = calcEndTime(startTime, val, breakMinutes);
+    setEndTime(newEnd);
+  };
+
+  const handleStartTimeChange = (val: string) => {
+    setStartTime(val);
+    const newEnd = calcEndTime(val, hoursToAdd, breakMinutes);
+    setEndTime(newEnd);
+  };
+
+  const handleBreakMinutesChange = (val: number) => {
+    const cleanBreak = Math.max(0, val);
+    setBreakMinutes(cleanBreak);
+    const newEnd = calcEndTime(startTime, hoursToAdd, cleanBreak);
+    setEndTime(newEnd);
+  };
+
+  const handleEndTimeChange = (val: string) => {
+    setEndTime(val);
+    const newHrs = calcHoursFromTimes(startTime, val, breakMinutes);
+    setHoursToAdd(newHrs);
+  };
 
   const calculateGrossDurationSeconds = (): number => {
     try {
@@ -166,21 +265,78 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
         <div className="flex-1 overflow-y-auto py-3 space-y-4 pr-1">
           <form id="manual-time-form" onSubmit={handleSubmit} className="space-y-4 text-xs">
           {isPrivileged && (
-            <div>
+            <div className="relative" ref={employeeDropdownRef}>
               <label className="block text-slate-800 font-bold mb-1.5 flex items-center gap-1.5">
                 <UserCheck className="w-4 h-4 text-blue-600" /> Target Employee Account
               </label>
-              <select
-                value={targetUserId}
-                onChange={(e) => setTargetUserId(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-xl p-3 focus:ring-2 focus:ring-blue-500 font-bold text-xs"
-              >
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.employeeCode ? `[${u.employeeCode}] ` : ''}{u.name} — ({u.designation || u.role})
-                  </option>
-                ))}
-              </select>
+              
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <Search className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Type to search employee name or code (e.g. Juan, Maria, LLC-0081)..."
+                  value={employeeSearchQuery}
+                  onFocus={() => setIsEmployeeDropdownOpen(true)}
+                  onChange={(e) => {
+                    setEmployeeSearchQuery(e.target.value);
+                    setIsEmployeeDropdownOpen(true);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-xl pl-9 pr-8 p-3 focus:ring-2 focus:ring-blue-500 font-bold text-xs shadow-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsEmployeeDropdownOpen((p) => !p)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Searchable Combobox Dropdown */}
+              {isEmployeeDropdownOpen && (
+                <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100">
+                  {filteredUsers.length > 0 ? (
+                    filteredUsers.map((u) => {
+                      const isSelected = u.id === targetUserId;
+                      return (
+                        <div
+                          key={u.id}
+                          onClick={() => {
+                            setTargetUserId(u.id);
+                            const codeLabel = u.employeeCode ? `[${u.employeeCode}] ` : '';
+                            setEmployeeSearchQuery(`${codeLabel}${u.name} — (${u.designation || u.role})`);
+                            setIsEmployeeDropdownOpen(false);
+                          }}
+                          className={`p-2.5 flex items-center justify-between hover:bg-blue-50 cursor-pointer transition-colors ${
+                            isSelected ? 'bg-blue-50/80 font-bold text-blue-900' : 'text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 text-[10px] font-bold shrink-0">
+                              {u.name?.slice(0, 2).toUpperCase() || 'EM'}
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-slate-900">
+                                {u.employeeCode ? `[${u.employeeCode}] ` : ''}{u.name}
+                              </p>
+                              <p className="text-[10px] text-slate-500 font-medium">
+                                {u.designation || u.role} • {u.department || 'Operations'}
+                              </p>
+                            </div>
+                          </div>
+                          {isSelected && <Check className="w-4 h-4 text-blue-600 shrink-0" />}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-3 text-center text-slate-500 text-xs font-medium">
+                      No employees match "{employeeSearchQuery}"
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -195,23 +351,42 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-slate-800 font-bold mb-1.5">Clock In (Start)</label>
               <input
                 type="time"
                 value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
+                onChange={(e) => handleStartTimeChange(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 font-semibold"
                 required
               />
             </div>
+
+            {/* Shift Hours to Add Box */}
+            <div>
+              <label className="block text-slate-800 font-bold mb-1.5 text-blue-900 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" /> Hours to Add
+              </label>
+              <input
+                type="number"
+                step="0.25"
+                min="0.1"
+                max="24"
+                placeholder="e.g. 8"
+                value={hoursToAdd}
+                onChange={(e) => handleHoursChange(e.target.value)}
+                className="w-full bg-blue-50/70 border border-blue-300 text-blue-950 font-bold rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500"
+                required
+              />
+            </div>
+
             <div>
               <label className="block text-slate-800 font-bold mb-1.5">Clock Out (End)</label>
               <input
                 type="time"
                 value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
+                onChange={(e) => handleEndTimeChange(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 font-semibold"
                 required
               />
@@ -228,7 +403,7 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
                 min="0"
                 max="360"
                 value={breakMinutes}
-                onChange={(e) => setBreakMinutes(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => handleBreakMinutesChange(parseInt(e.target.value) || 0)}
                 className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 font-semibold"
               />
             </div>
