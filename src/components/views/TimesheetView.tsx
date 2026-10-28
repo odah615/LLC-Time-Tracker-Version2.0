@@ -820,12 +820,21 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       const first = logs[0];
       const tasks = Array.from(new Set(logs.map((l) => l.task).filter(Boolean))).join(', ');
 
-      // Filter out duplicate running segments: keep completed logs + only the single latest running segment
+      // Keep completed logs + auto-finalize any previous running logs with duration > 5s + latest active running log
       const completedLogs = logs.filter((l) => l.status === 'completed');
       const runningLogs = logs.filter((l) => l.status === 'running' || l.endTime === 'Running Live');
+
+      const previousRunningLogs = runningLogs.slice(0, runningLogs.length - 1).filter((l) => (Number(l.durationSeconds) || 0) > 5).map((l) => ({
+        ...l,
+        status: 'completed' as const,
+        endTime: l.geoLocalEndTime || l.endTime || 'Shift Completed',
+      }));
+
       const latestRunningLog = runningLogs.length > 0 ? runningLogs[runningLogs.length - 1] : null;
 
-      const consolidatedLogs = latestRunningLog ? [...completedLogs, latestRunningLog] : completedLogs;
+      const consolidatedLogs = Array.from(
+        new Map([...completedLogs, ...previousRunningLogs, ...(latestRunningLog ? [latestRunningLog] : [])].map((l) => [l.id, l])).values()
+      );
       const logsForTiming = consolidatedLogs.length > 0 ? consolidatedLogs : logs;
 
       const sorted = [...logsForTiming].sort((a, b) => {

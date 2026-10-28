@@ -836,6 +836,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const empCode = currentUser.employeeCode || currentUser.id;
     const newSegmentId = `seg-${empCode}-${now}`;
 
+    // Auto-finalize any previous orphan running logs for this employee before starting a new segment
+    setTimeLogs((prev) => {
+      const targetCode = String(empCode).trim().toLowerCase();
+      let modified = false;
+      const updated = prev.map((l) => {
+        const lCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+        if (lCode === targetCode && l.id !== newSegmentId && (l.status === 'running' || l.id.startsWith('active-seg-') || l.id.startsWith('seg-running-'))) {
+          modified = true;
+          if ((l.durationSeconds || 0) > 5) {
+            return {
+              ...l,
+              status: 'completed' as const,
+              endTime: l.endTime === 'Running Live' || l.endTime === 'In Progress (10m Sync)' ? (l.geoLocalEndTime || getManilaIsoString(new Date(now))) : l.endTime,
+            };
+          }
+          return null;
+        }
+        return l;
+      }).filter(Boolean) as TimeLog[];
+
+      if (modified) {
+        localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
+      }
+      return updated;
+    });
+
     activeSegmentIdRef.current = newSegmentId;
     taskStartTimeRef.current = now;
     accumulatedPausedMsRef.current = 0;
@@ -1561,14 +1587,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addTimeLog = (logData: Omit<TimeLog, 'id'> & { id?: string }) => {
     const newLog: TimeLog = { id: logData.id || `log-${Date.now()}`, ...logData };
     setTimeLogs((prev) => {
-      // Remove any running log for THIS specific employee when a completed log arrives to prevent double duration
       const targetCode = String(logData.employeeCode || logData.userId || '').trim().toLowerCase();
-      const filtered = logData.status === 'completed'
-        ? prev.filter((l) => {
-            const lCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
-            return !(targetCode && lCode === targetCode && (l.status === 'running' || l.id.startsWith('active-seg-') || l.id.startsWith('seg-running-')));
-          })
-        : prev.filter((l) => l.id !== newLog.id);
+      let updatedPrev = [...prev];
+      if (logData.status === 'completed' && targetCode) {
+        updatedPrev = updatedPrev.map((l) => {
+          const lCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+          if (
+            lCode === targetCode &&
+            l.id !== newLog.id &&
+            (l.status === 'running' || l.id.startsWith('active-seg-') || l.id.startsWith('seg-running-'))
+          ) {
+            // Auto-finalize running sessions with real recorded time (> 5s) instead of deleting them
+            if ((l.durationSeconds || 0) > 5) {
+              return {
+                ...l,
+                status: 'completed' as const,
+                endTime: l.endTime === 'Running Live' || l.endTime === 'In Progress (10m Sync)' ? (l.geoLocalEndTime || logData.startTime || getManilaIsoString(new Date())) : l.endTime,
+              };
+            }
+            return null; // drop zero/tiny heartbeat placeholders
+          }
+          return l;
+        }).filter(Boolean) as TimeLog[];
+      } else {
+        updatedPrev = updatedPrev.filter((l) => l.id !== newLog.id);
+      }
+
+      const filtered = updatedPrev.filter((l) => l.id !== newLog.id);
       const updated = [newLog, ...filtered];
       localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
 
