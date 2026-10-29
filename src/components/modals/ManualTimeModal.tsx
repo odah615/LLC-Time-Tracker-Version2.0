@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { TASK_LIST } from '../../data/initialData';
 import { TaskCategory, TimeLog, User } from '../../types';
 import { Clock, X, Check, UserCheck, ShieldCheck, Coffee, FileSpreadsheet, AlertCircle, Search, ChevronDown, User as UserIcon } from 'lucide-react';
-import { getManilaIsoString } from '../../lib/dateUtils';
+import { getManilaIsoString, getManilaDateString } from '../../lib/dateUtils';
 
 interface ManualTimeModalProps {
   isOpen: boolean;
@@ -31,7 +31,7 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
   const [isEmployeeDropdownOpen, setIsEmployeeDropdownOpen] = useState(false);
   const employeeDropdownRef = useRef<HTMLDivElement>(null);
 
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(getManilaDateString());
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('17:00');
   const [hoursToAdd, setHoursToAdd] = useState('8');

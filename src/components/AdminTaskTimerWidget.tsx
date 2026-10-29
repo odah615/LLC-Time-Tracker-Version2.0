@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { Play, Pause, Square, Clock, Laptop, CheckCircle2 } from 'lucide-react';
 import { TASK_LIST } from '../data/initialData';
 import { TaskCategory } from '../types';
+import { getManilaDateString } from '../lib/dateUtils';
 
 export const AdminTaskTimerWidget: React.FC = () => {
   const { currentUser, addTimeLog, formatDuration } = useApp();
@@ -88,7 +89,7 @@ export const AdminTaskTimerWidget: React.FC = () => {
       employeeCode: currentUser.employeeCode,
       userName: currentUser.name,
       userAvatar: currentUser.avatar || '',
-      date: now.toISOString().split('T')[0],
+      date: getManilaDateString(now),
       startTime: startTimeStr,
       endTime: endTimeStr,
       durationSeconds: finalSecs,

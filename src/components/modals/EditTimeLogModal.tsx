@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { TASK_LIST } from '../../data/initialData';
 import type { TaskCategory, TimeLog } from '../../types';
 import { Clock, X, Check, ShieldCheck, AlertCircle, Edit3, Sparkles } from 'lucide-react';
-import { getManilaIsoString, formatDurationDetailed } from '../../lib/dateUtils';
+import { getManilaIsoString, getManilaDateString, formatDurationDetailed } from '../../lib/dateUtils';
 
 interface EditTimeLogModalProps {
   isOpen: boolean;
@@ -30,7 +30,7 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
   // Sync modal form state whenever active log changes
   useEffect(() => {
     if (log) {
-      setDate(log.date || new Date().toISOString().split('T')[0]);
+      setDate(log.date || getManilaDateString());
       setTask(log.task || 'Data Entry & Market Research');
       setIdleMinutes(Math.round((log.idleSeconds || 0) / 60));
 

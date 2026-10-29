@@ -1059,7 +1059,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const segId = activeSegmentIdRef.current;
 
-    addTimeLog({
+    const completedLog: TimeLog = {
       id: segId,
       userId: currentUser.id,
       employeeCode: currentUser.employeeCode,
@@ -1080,7 +1080,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: todayStr,
       notes: 'Logged via LLC-Time-Tracker-V2 Desktop Tracker',
       appsUsed: [],
-    });
+    };
+    addTimeLog(completedLog);
     setSessionIdleDeductionSeconds(0);
 
     // Finalizer Sweep: Clean up any stuck / unclosed running sessions for this user on today's date
@@ -1129,6 +1130,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
+    // Priority Flush: Gather ALL completed logs for THIS employee and immediately push to server and Google Sheets
+    const userCompletedLogs = Array.from(
+      new Map(
+        [
+          ...timeLogs.filter((l) => {
+            const logCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
+            return (logCode === empCode || l.userId === currentUser.id) && l.status === 'completed';
+          }),
+          completedLog,
+          ...stuckLogsToFinalize,
+        ].map((l) => [l.id, l])
+      ).values()
+    );
+
+    fetch('/api/timelogs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userCompletedLogs),
+    }).catch(() => {});
+
+    if (googleSheetsWebhookUrl) {
+      syncDataToGoogleSheetsWebhook(
+        googleSheetsWebhookUrl,
+        userCompletedLogs,
+        users,
+        auditLogs,
+        payrollRecords,
+        dailyAttendanceLogs,
+        idleLogs,
+        leaveRequests,
+        designationTasks,
+        rolePermissions,
+        userCompletedLogs
+      ).catch(() => {});
+    }
+
     // Call server endpoint to finalize shift in server memory as well
     fetch('/api/timelogs/finalize-shift', {
       method: 'POST',
@@ -1173,28 +1210,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getTodayTrackedSeconds = useCallback((): number => {
     const today = getManilaDateString();
-    return timeLogs
+    const completedTodaySec = timeLogs
       .filter((l) => {
         const matchesUser =
           (currentUser.id && l.userId === currentUser.id) ||
           (currentUser.employeeCode && l.employeeCode === currentUser.employeeCode);
         if (!matchesUser) return false;
-        const logDate = l.startTime ? getManilaDateString(new Date(l.startTime)) : (l.date || today);
+        if (l.status !== 'completed') return false;
+        const logDate = l.date || (l.startTime ? getManilaDateString(new Date(l.startTime)) : today);
         return logDate === today;
       })
-      .reduce((acc, l) => {
-        if (l.status === 'completed') {
-          return acc + (Number(l.durationSeconds) || 0);
-        }
-        if (l.status === 'running' && l.startTime) {
-          const startMs = new Date(l.startTime).getTime();
-          if (!isNaN(startMs)) {
-            const liveDur = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-            return acc + (isTracking ? 0 : liveDur);
-          }
-        }
-        return acc;
-      }, isTracking ? elapsedSeconds : 0);
+      .reduce((sum, l) => sum + Math.max(0, Number(l.durationSeconds) || 0), 0);
+
+    const activeSec = isTracking ? Math.max(0, elapsedSeconds) : 0;
+    return completedTodaySec + activeSec;
   }, [timeLogs, currentUser.id, currentUser.employeeCode, isTracking, elapsedSeconds]);
 
   const todayTotalSeconds = getTodayTrackedSeconds();

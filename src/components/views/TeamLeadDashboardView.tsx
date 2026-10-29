@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { User, IdleLog, LeaveRequest } from '../../types';
 import { downloadDesktopSoftwarePackage, DesktopOS } from '../../lib/desktopDownloader';
 import { isEmployeeAssignedToSupervisor } from '../../lib/userUtils';
+import { getManilaDateString } from '../../lib/dateUtils';
 import { UserAvatar } from '../UserAvatar';
 import { LiveAgentTasksBoard } from '../LiveAgentTasksBoard';
 import {
@@ -279,7 +280,7 @@ export const TeamLeadDashboardView: React.FC = () => {
             {currentAgents.map((agent) => {
               const agentAllLogs = timeLogs.filter((l) => l.userId === agent.id);
               const lastLog = agentAllLogs[0];
-              const todayStr = new Date().toISOString().split('T')[0];
+              const todayStr = getManilaDateString();
               const agentTodayLogs = agentAllLogs.filter((l) => l.date === todayStr);
               const baseTodaySec = agentTodayLogs.reduce((acc, l) => acc + l.durationSeconds, 0);
               const presence = userPresenceList.find(

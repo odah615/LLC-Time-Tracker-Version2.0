@@ -776,6 +776,19 @@ app.delete('/api/timelogs/:id', (req, res) => {
 });
 
 // POST /api/daily-summary/ensure: Creates or verifies a Daily_Summary row when tracking starts
+function getServerManilaDateString(dateObj: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(dateObj);
+  } catch {
+    return dateObj.toISOString().split('T')[0];
+  }
+}
+
 app.post('/api/daily-summary/ensure', (req, res) => {
   const { employeeCode, userId, userName, designation, date } = req.body || {};
   if (!employeeCode && !userId) {
@@ -783,7 +796,7 @@ app.post('/api/daily-summary/ensure', (req, res) => {
   }
 
   const empCode = String(employeeCode || userId).trim();
-  const workDate = date || new Date().toISOString().split('T')[0];
+  const workDate = date || getServerManilaDateString();
 
   // Return calculated summary for that employee/date
   const allLogs = bridgeState.timelogs.filter((l) => {
