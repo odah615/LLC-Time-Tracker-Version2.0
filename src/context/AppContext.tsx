@@ -1683,73 +1683,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateTimeLog = async (id: string, data: Partial<TimeLog>) => {
-    let updatedLog: TimeLog | null = null;
+    let targetLog = timeLogs.find((l) => l.id === id || String((l as any).sessionId || '') === String(id));
+
+    if (!targetLog) {
+      try {
+        const saved = localStorage.getItem('trackpulse_timelogs');
+        if (saved) {
+          const parsed: TimeLog[] = JSON.parse(saved);
+          targetLog = parsed.find((l) => l.id === id || String((l as any).sessionId || '') === String(id));
+        }
+      } catch {}
+    }
+
+    if (!targetLog) {
+      console.warn('Time log not found for update:', id);
+      return;
+    }
+
+    const mergedLog: TimeLog = { ...targetLog, ...data };
+
     setTimeLogs((prev) => {
       const updated = prev.map((l) => {
         if (l.id === id || String((l as any).sessionId || '') === String(id)) {
-          const merged = { ...l, ...data };
-          updatedLog = merged;
-          return merged;
+          return mergedLog;
         }
         return l;
       });
       localStorage.setItem('trackpulse_timelogs', JSON.stringify(updated));
-
-      // Update local daily backup key so self-healing doesn't revert the edit
-      if (updatedLog) {
-        try {
-          const empCode = String((updatedLog as TimeLog).employeeCode || (updatedLog as TimeLog).userId || '').trim();
-          if (empCode) {
-            const backupKey = `llc_daily_time_backup_${empCode}`;
-            const existingBackup: TimeLog[] = JSON.parse(localStorage.getItem(backupKey) || '[]');
-            const filteredBackup = existingBackup.filter((b) => b.id !== (updatedLog as TimeLog).id);
-            const updatedBackup = [updatedLog as TimeLog, ...filteredBackup];
-            localStorage.setItem(backupKey, JSON.stringify(updatedBackup));
-          }
-        } catch (e) {}
-      }
-
       return updated;
     });
 
-    if (updatedLog) {
-      const target: TimeLog = updatedLog;
-      if (db) {
-        await safeSetDoc(doc(db, 'timeLogs', target.id), target).catch(() => {});
+    // Update local daily backup key so self-healing doesn't revert the edit
+    try {
+      const empCode = String(mergedLog.employeeCode || mergedLog.userId || '').trim();
+      if (empCode) {
+        const backupKey = `llc_daily_time_backup_${empCode}`;
+        const existingBackup: TimeLog[] = JSON.parse(localStorage.getItem(backupKey) || '[]');
+        const filteredBackup = existingBackup.filter((b) => b.id !== mergedLog.id);
+        const updatedBackup = [mergedLog, ...filteredBackup];
+        localStorage.setItem(backupKey, JSON.stringify(updatedBackup));
       }
+    } catch (e) {}
 
-      fetch('/api/timelogs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify([target]),
-      }).catch((err) => console.warn('Failed to update time log on server:', err));
-
-      if (googleSheetsWebhookUrl) {
-        fetch(googleSheetsWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            secret: 'LLCTrackerV2SecretKey2026',
-            sharedSecret: 'LLCTrackerV2SecretKey2026',
-            action: 'UPDATE_TIMELOG',
-            id: target.id,
-            logId: target.id,
-            sessionId: (target as any).sessionId || target.id,
-            employeeCode: target.employeeCode || target.userId,
-            userId: target.userId,
-            date: target.date,
-            task: target.task,
-            startTime: target.startTime,
-            endTime: target.endTime,
-            durationSeconds: target.durationSeconds,
-            notes: target.notes,
-          }),
-        }).catch((err) => console.warn('Webhook dispatch notice on time log update:', err));
-      }
-
-      setSaveToast('Timesheet entry successfully updated and synced to V2 Spreadsheet!');
-      setTimeout(() => setSaveToast(null), 3000);
+    if (db) {
+      await safeSetDoc(doc(db, 'timeLogs', mergedLog.id), mergedLog).catch(() => {});
     }
+
+    fetch('/api/timelogs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([mergedLog]),
+    }).catch((err) => console.warn('Failed to update time log on server:', err));
+
+    if (googleSheetsWebhookUrl) {
+      // 1. Dispatch UPDATE_TIMELOG action to Google Sheets Apps Script
+      fetch(googleSheetsWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          secret: 'LLCTrackerV2SecretKey2026',
+          sharedSecret: 'LLCTrackerV2SecretKey2026',
+          action: 'UPDATE_TIMELOG',
+          id: mergedLog.id,
+          logId: mergedLog.id,
+          sessionId: (mergedLog as any).sessionId || mergedLog.id,
+          employeeCode: mergedLog.employeeCode || mergedLog.userId,
+          userId: mergedLog.userId,
+          date: mergedLog.date,
+          task: mergedLog.task,
+          startTime: mergedLog.startTime,
+          endTime: mergedLog.endTime,
+          durationSeconds: mergedLog.durationSeconds,
+          notes: mergedLog.notes,
+        }),
+      }).catch((err) => console.warn('Webhook dispatch notice on time log update:', err));
+
+      // 2. Also dispatch SYNC_TIMELOGS with [mergedLog] to ensure row upsert in Google Sheets
+      syncDataToGoogleSheetsWebhook(
+        googleSheetsWebhookUrl,
+        [mergedLog],
+        users,
+        auditLogs,
+        payrollRecords,
+        dailyAttendanceLogs,
+        idleLogs,
+        leaveRequests,
+        designationTasks,
+        rolePermissions,
+        [mergedLog],
+        userPresenceList
+      ).catch(() => {});
+    }
+
+    setSaveToast('Timesheet entry successfully updated and synced to V2 Spreadsheet!');
+    setTimeout(() => setSaveToast(null), 3000);
   };
 
   const completeSessionLog = async (logId: string) => {

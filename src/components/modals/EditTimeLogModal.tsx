@@ -230,8 +230,8 @@ export const EditTimeLogModal: React.FC<EditTimeLogModalProps> = ({ isOpen, onCl
         details: `Updated timesheet for ${log.userName} (${log.employeeCode}): ${task} set to ${netFormattedString} (${netHoursFormatted} hrs). Note: ${reason}`,
       });
 
-      // 3. Dispatch Google Sheets Webhook sync
-      await triggerGoogleSheetsSync();
+      // 3. Dispatch Google Sheets Webhook sync with explicit updated log
+      await triggerGoogleSheetsSync(undefined, [{ ...log, ...updatedFields }]);
 
       setIsSaving(false);
       onClose();
