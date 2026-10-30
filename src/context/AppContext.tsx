@@ -1851,14 +1851,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTimeLogs((prev) => {
       const filtered = prev.filter((l) => {
         const lDetId = getDeterministicLogId(l);
-        const matchesId = lDetId === detTargetId || String(l.id) === String(id) || String((l as any).sessionId || '') === String(id);
+        const matchesId =
+          lDetId === detTargetId ||
+          String(l.id) === String(id) ||
+          String((l as any).sessionId || '') === String(id) ||
+          (String(id).length >= 4 && (String(l.id).includes(String(id)) || String(id).includes(String(l.id))));
         if (matchesId) return false;
+
         if (targetLog) {
           const sameEmp = String((l as any).employeeCode || l.userId || '').toLowerCase() === String(targetLog.employeeCode || targetLog.userId || '').toLowerCase();
           const sameDate = l.date === targetLog.date;
           const sameTask = String(l.task || '').toLowerCase() === String(targetLog.task || '').toLowerCase();
-          const sameDur = Math.abs(Number(l.durationSeconds) - Number(targetLog.durationSeconds)) < 5;
-          if (sameEmp && sameDate && sameTask && sameDur) return false;
+          const sameDur = Math.abs(Number(l.durationSeconds) - Number(targetLog.durationSeconds)) < 30;
+          const isRunningSession = l.status === 'running' || String(l.endTime || '').includes('Progress') || String(l.endTime || '').includes('Running');
+
+          if (sameEmp && sameDate && (isRunningSession || (sameTask && sameDur))) return false;
         }
         return true;
       });

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { getManilaDateString, formatTotalTime } from '../../lib/dateUtils';
+import { getManilaDateString, formatTotalTime, formatLogStartTime } from '../../lib/dateUtils';
 import { DEFAULT_SPREADSHEET_ID, DEFAULT_SPREADSHEET_URL, generateAppsScriptCode } from '../../lib/googleSheetsSync';
 import {
   Calendar,
@@ -1645,7 +1645,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
                           {log.task}
                         </td>
                         <td className="py-3 px-4 font-mono">
-                          {log.date} • {log.geoLocalStartTime || '—'}
+                          {log.date} • {formatLogStartTime(log) || '—'}
                         </td>
                         <td className="py-3 px-4 font-mono text-slate-600">
                           {isUnclosedOrRunning

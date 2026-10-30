@@ -1301,8 +1301,8 @@ function handlePost_(e) {
             idStr === targetId ||
             idStr.toLowerCase() === targetId.toLowerCase() ||
             userIdStr === targetId ||
-            (idStr.length > 5 && targetId.indexOf(idStr) !== -1) ||
-            (targetId.length > 5 && idStr.indexOf(targetId) !== -1)
+            (idStr.length >= 4 && targetId.indexOf(idStr) !== -1) ||
+            (targetId.length >= 4 && idStr.indexOf(targetId) !== -1)
           );
 
           var normRowEmp = normalizeEmployeeCodeKey_(rowEmpCode);
@@ -1323,7 +1323,11 @@ function handlePost_(e) {
           var isTaskMatch = !targetTask || rowTask === targetTask || rowTask.indexOf(targetTask) !== -1 || targetTask.indexOf(rowTask) !== -1;
           var isDurMatch = !targetDur || Math.abs(rowDur - targetDur) < 30 || Math.abs(rowDur * 3600 - targetDur) < 30 || Math.abs(rowDur - targetDur / 3600) < 0.1;
 
-          var isMetaMatch = isEmpMatch && isDateMatch && isTaskMatch && isDurMatch;
+          var rowStatus = String(existingData[dk][12] || "").trim().toLowerCase();
+          var rowEndTime = String(existingData[dk][7] || "").trim().toLowerCase();
+          var isRunningRow = rowStatus === "running" || rowEndTime.indexOf("progress") !== -1 || rowEndTime.indexOf("running") !== -1;
+
+          var isMetaMatch = isEmpMatch && isDateMatch && (isTaskMatch && isDurMatch || isRunningRow);
 
           if (isIdMatch || isMetaMatch) {
             timeLogsSheet.deleteRow(dk + 2);

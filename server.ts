@@ -723,7 +723,13 @@ app.delete('/api/timelogs/:id', (req, res) => {
     const logSessionId = String(l.sessionId || '').trim().toLowerCase();
     const logSegmentId = String(l.segmentId || '').trim().toLowerCase();
 
-    const idMatches = logId === targetId || logSessionId === targetId || logSegmentId === targetId;
+    const idMatches =
+      logId === targetId ||
+      logSessionId === targetId ||
+      logSegmentId === targetId ||
+      (targetId.length >= 4 && (logId.includes(targetId) || targetId.includes(logId))) ||
+      (targetId.length >= 4 && (logSessionId.includes(targetId) || targetId.includes(logSessionId)));
+
     if (idMatches) {
       if (logId && !bridgeState.deletedLogIds.includes(logId)) bridgeState.deletedLogIds.push(logId);
       if (logSessionId && !bridgeState.deletedLogIds.includes(logSessionId)) bridgeState.deletedLogIds.push(logSessionId);
@@ -735,8 +741,10 @@ app.delete('/api/timelogs/:id', (req, res) => {
     if (employeeCode && date && l.date === date) {
       const empMatch = String(l.employeeCode || l.userId || '').trim().toLowerCase() === String(employeeCode).trim().toLowerCase();
       const taskMatch = !task || String(l.task || '').trim().toLowerCase() === String(task).trim().toLowerCase();
-      const durMatch = !durationSeconds || Math.abs(Number(l.durationSeconds) - Number(durationSeconds)) < 10;
-      if (empMatch && taskMatch && durMatch) {
+      const durMatch = !durationSeconds || Math.abs(Number(l.durationSeconds) - Number(durationSeconds)) < 30;
+      const isRunningLog = l.status === 'running' || String(l.endTime || '').includes('Progress') || String(l.endTime || '').includes('Running');
+
+      if (empMatch && (isRunningLog || (taskMatch && durMatch))) {
         if (logId && !bridgeState.deletedLogIds.includes(logId)) bridgeState.deletedLogIds.push(logId);
         const lSig = makeSig(l.employeeCode || l.userId, l.date, l.task, l.durationSeconds);
         if (!bridgeState.deletedLogSignatures!.includes(lSig)) bridgeState.deletedLogSignatures!.push(lSig);
