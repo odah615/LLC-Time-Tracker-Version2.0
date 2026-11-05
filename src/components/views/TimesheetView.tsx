@@ -482,20 +482,6 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     [filteredLogs]
   );
 
-  const taskCategoryBreakdown = useMemo(() => {
-    const map: Record<string, { seconds: number; count: number }> = {};
-    filteredLogs.forEach((log) => {
-      const taskName = log.task || 'Unspecified Task';
-      const duration = Number(log.durationSeconds) || 0;
-      if (!map[taskName]) {
-        map[taskName] = { seconds: 0, count: 0 };
-      }
-      map[taskName].seconds += duration;
-      map[taskName].count += 1;
-    });
-    return Object.entries(map).sort((a, b) => b[1].seconds - a[1].seconds);
-  }, [filteredLogs]);
-
   const livePeriodSession = useMemo(() => {
     const today = getManilaDateString();
     if (!isLogInPeriod(today, viewTab)) {
@@ -581,6 +567,26 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     elapsedSeconds,
     viewTab,
   ]);
+
+  const taskCategoryBreakdown = useMemo(() => {
+    const map: Record<string, { seconds: number; count: number }> = {};
+    filteredLogs.forEach((log) => {
+      const taskName = log.task || 'Unspecified Task';
+      const isRunning =
+        log.status === 'running' ||
+        log.endTime === 'Running Live' ||
+        log.endTime === 'In Progress (Live)';
+      const duration = isRunning
+        ? Math.max(Number(log.durationSeconds) || 0, livePeriodSession.durationSeconds)
+        : Number(log.durationSeconds) || 0;
+      if (!map[taskName]) {
+        map[taskName] = { seconds: 0, count: 0 };
+      }
+      map[taskName].seconds += duration;
+      map[taskName].count += 1;
+    });
+    return Object.entries(map).sort((a, b) => b[1].seconds - a[1].seconds);
+  }, [filteredLogs, livePeriodSession.durationSeconds]);
 
   const totalGrossSeconds = useMemo(
     () =>

@@ -844,11 +844,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const lCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
         if (lCode === targetCode && l.id !== newSegmentId && (l.status === 'running' || l.id.startsWith('active-seg-') || l.id.startsWith('seg-running-'))) {
           modified = true;
-          if ((l.durationSeconds || 0) > 5) {
+          let computedDuration = l.durationSeconds || 1;
+          let computedEndIso = getManilaIsoString(new Date(now));
+          let computedGeoEnd = getManilaTimeString(new Date(now));
+
+          if (l.startTime) {
+            const lStartMs = new Date(l.startTime).getTime();
+            if (!isNaN(lStartMs) && lStartMs > 0 && lStartMs <= now) {
+              computedDuration = Math.max(1, Math.floor((now - lStartMs) / 1000));
+            }
+          }
+
+          if (computedDuration > 5) {
             return {
               ...l,
               status: 'completed' as const,
-              endTime: l.endTime === 'Running Live' || l.endTime === 'In Progress (10m Sync)' ? (l.geoLocalEndTime || getManilaIsoString(new Date(now))) : l.endTime,
+              durationSeconds: computedDuration,
+              endTime: computedEndIso,
+              geoLocalEndTime: computedGeoEnd,
             };
           }
           return null;
@@ -1095,21 +1108,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isDifferentSegment = l.id !== segId;
 
       if (isSameUser && isRunning && isDifferentSegment) {
-        let computedEndIso = l.endTime;
-        let computedGeoEnd = l.geoLocalEndTime;
+        let computedEndIso = getManilaIsoString(now);
+        let computedGeoEnd = getManilaTimeString(now);
+        let realDurationSec = l.durationSeconds || 0;
+
         if (l.startTime) {
           const lStartMs = new Date(l.startTime).getTime();
-          if (!isNaN(lStartMs) && (l.durationSeconds || 0) > 0) {
-            const endD = new Date(lStartMs + (l.durationSeconds || 0) * 1000);
-            computedEndIso = getManilaIsoString(endD);
-            computedGeoEnd = getManilaTimeString(endD);
-          } else {
-            computedEndIso = getManilaIsoString(now);
-            computedGeoEnd = getManilaTimeString(now);
+          if (!isNaN(lStartMs) && lStartMs > 0 && lStartMs <= now.getTime()) {
+            realDurationSec = Math.max(1, Math.floor((now.getTime() - lStartMs) / 1000));
           }
-        } else {
-          computedEndIso = getManilaIsoString(now);
-          computedGeoEnd = getManilaTimeString(now);
         }
 
         const finalizedLog: TimeLog = {
@@ -1117,6 +1124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status: 'completed',
           endTime: computedEndIso,
           geoLocalEndTime: computedGeoEnd,
+          durationSeconds: realDurationSec,
           notes: l.notes ? `${l.notes} (Auto-closed on tracker stop)` : 'Auto-closed on tracker stop',
         };
         stuckLogsToFinalize.push(finalizedLog);
@@ -1210,6 +1218,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getTodayTrackedSeconds = useCallback((): number => {
     const today = getManilaDateString();
+    const empCode = (currentUser.employeeCode || currentUser.id || '').trim();
+
     const completedTodaySec = timeLogs
       .filter((l) => {
         const matchesUser =
@@ -1223,7 +1233,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .reduce((sum, l) => sum + Math.max(0, Number(l.durationSeconds) || 0), 0);
 
     const activeSec = isTracking ? Math.max(0, elapsedSeconds) : 0;
-    return completedTodaySec + activeSec;
+    const currentCalculated = completedTodaySec + activeSec;
+
+    let savedBackup = 0;
+    if (empCode) {
+      try {
+        const key = `trackpulse_daily_total_${empCode.toLowerCase()}_${today}`;
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          savedBackup = Math.max(0, Number(raw) || 0);
+        }
+        if (currentCalculated > savedBackup) {
+          localStorage.setItem(key, String(currentCalculated));
+        }
+      } catch {}
+    }
+
+    return Math.max(currentCalculated, savedBackup);
   }, [timeLogs, currentUser.id, currentUser.employeeCode, isTracking, elapsedSeconds]);
 
   const todayTotalSeconds = getTodayTrackedSeconds();
@@ -1479,16 +1505,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         setTimeLogs((prev) => {
-          const activeRunning = prev.filter(
-            (l) => l.status === 'running' || String(l.id).startsWith('active-seg-') || String(l.id).startsWith('seg-running-')
-          );
           const map = new Map<string, TimeLog>();
-          for (const item of mappedLogs) {
+          for (const item of prev) {
             map.set(item.id, item);
           }
-          for (const item of activeRunning) {
-            if (!map.has(item.id)) {
+          for (const item of mappedLogs) {
+            const local = map.get(item.id);
+            if (!local) {
               map.set(item.id, item);
+            } else if (local.status !== 'running') {
+              map.set(item.id, { ...local, ...item });
             }
           }
           const merged = Array.from(map.values());
