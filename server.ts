@@ -32,6 +32,26 @@ export function hashPassword(password: string): string {
   return `pbkdf2:sha512:10000:${salt}:${hash}`;
 }
 
+export function verifyPasswordAsync(password: string, storedHashOrPlain?: string): Promise<boolean> {
+  if (!storedHashOrPlain) return Promise.resolve(false);
+  const trimmed = storedHashOrPlain.trim();
+  if (trimmed.startsWith('pbkdf2:')) {
+    const parts = trimmed.split(':');
+    if (parts.length === 5) {
+      const iterations = parseInt(parts[2], 10);
+      const salt = parts[3];
+      const originalHash = parts[4];
+      return new Promise<boolean>((resolve) => {
+        crypto.pbkdf2(password, salt, iterations, 64, 'sha512', (err, derivedKey) => {
+          if (err) return resolve(false);
+          resolve(derivedKey.toString('hex') === originalHash);
+        });
+      });
+    }
+  }
+  return Promise.resolve(trimmed === password);
+}
+
 export function verifyPassword(password: string, storedHashOrPlain?: string): boolean {
   if (!storedHashOrPlain) return false;
   const trimmed = storedHashOrPlain.trim();
@@ -312,7 +332,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { usernameOrCode, password } = req.body || {};
   if (!usernameOrCode || !password) {
     return res.status(400).json({ success: false, error: 'Username/Code and password are required' });
@@ -363,11 +383,11 @@ app.post('/api/auth/login', (req, res) => {
 
   let isValid = false;
   if (isPwChanged) {
-    isValid = verifyPassword(password, storedHash) || (foundUser.password ? password === foundUser.password : false);
+    isValid = (await verifyPasswordAsync(password, storedHash)) || (foundUser.password ? password === foundUser.password : false);
   } else {
     isValid =
       password === 'Password123!' ||
-      verifyPassword(password, storedHash) ||
+      (await verifyPasswordAsync(password, storedHash)) ||
       (foundUser.password ? password === foundUser.password : false) ||
       (isRootAdmin && (password === 'AdminpassW0rd123!' || password === 'AdminpassWord123!' || password === 'SUPERADMIN2026'));
   }

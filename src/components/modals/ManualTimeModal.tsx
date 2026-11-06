@@ -370,8 +370,8 @@ export const ManualTimeModal: React.FC<ManualTimeModalProps> = ({ isOpen, onClos
               </label>
               <input
                 type="number"
-                step="0.25"
-                min="0.1"
+                step="any"
+                min="0.01"
                 max="24"
                 placeholder="e.g. 8"
                 value={hoursToAdd}
