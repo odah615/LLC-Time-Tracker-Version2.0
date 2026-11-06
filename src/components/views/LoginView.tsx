@@ -50,6 +50,7 @@ export const LoginView: React.FC = () => {
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [downloadOS, setDownloadOS] = useState<'windows' | 'mac' | 'linux'>('windows');
@@ -76,6 +77,7 @@ export const LoginView: React.FC = () => {
       return;
     }
 
+    setIsLoggingIn(true);
     try {
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
@@ -96,6 +98,7 @@ export const LoginView: React.FC = () => {
           setNewUniquePassword('');
           setConfirmUniquePassword('');
           setFirstTimeError('');
+          setIsLoggingIn(false);
           return;
         }
         const resolvedMode: 'webapp' | 'software' = isSoftwareEnv ? 'software' : 'webapp';
@@ -103,8 +106,10 @@ export const LoginView: React.FC = () => {
         return;
       }
       setErrorMsg(data?.error || 'Login rejected: Invalid credentials.');
+      setIsLoggingIn(false);
     } catch (err: any) {
       setErrorMsg(`Unable to connect to authentication server (${err?.message || 'Network error'}). Please try again.`);
+      setIsLoggingIn(false);
     }
   };
 
@@ -314,18 +319,28 @@ export const LoginView: React.FC = () => {
 
             <button
               type="submit"
-              className={`w-full py-3.5 px-6 rounded-xl font-extrabold text-xs sm:text-sm text-white shadow-xl flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              disabled={isLoggingIn}
+              className={`w-full py-3.5 px-6 rounded-xl font-extrabold text-xs sm:text-sm text-white shadow-xl flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
                 isSoftwareEnv
                   ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-700/30'
                   : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'
               }`}
             >
-              <span>
-                {isSoftwareEnv
-                  ? 'Sign In to Time Tracker'
-                  : 'Sign In to LLC-Time-Tracker-V2'}
-              </span>
-              <ArrowRight className="w-4 h-4" />
+              {isLoggingIn ? (
+                <>
+                  <Clock className="w-4 h-4 animate-spin text-white" />
+                  <span>Authenticating & Loading Dashboard...</span>
+                </>
+              ) : (
+                <>
+                  <span>
+                    {isSoftwareEnv
+                      ? 'Sign In to Time Tracker'
+                      : 'Sign In to LLC-Time-Tracker-V2'}
+                  </span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </form>
 
