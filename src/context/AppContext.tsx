@@ -1506,6 +1506,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         setTimeLogs((prev) => {
           const map = new Map<string, TimeLog>();
+          const editedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_edited_ids') || '[]'));
           for (const item of prev) {
             map.set(item.id, item);
           }
@@ -1514,7 +1515,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (!local) {
               map.set(item.id, item);
             } else if (local.status !== 'running') {
-              map.set(item.id, { ...local, ...item });
+              const isEditedLocally = editedIds.has(item.id.toLowerCase()) || editedIds.has(local.id.toLowerCase());
+              if (isEditedLocally || (local.durationSeconds || 0) > (item.durationSeconds || 0)) {
+                // Preserve local Admin edit over older spreadsheet row
+                map.set(item.id, {
+                  ...item,
+                  ...local,
+                  durationSeconds: Math.max(local.durationSeconds || 0, item.durationSeconds || 0),
+                  endTime: (local.durationSeconds || 0) > (item.durationSeconds || 0) ? local.endTime : item.endTime,
+                });
+              } else {
+                map.set(item.id, { ...local, ...item });
+              }
             }
           }
           const merged = Array.from(map.values());
@@ -1727,6 +1739,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const mergedLog: TimeLog = { ...targetLog, ...data };
+
+    // Auto-align endTime if durationSeconds was updated without explicit endTime
+    if (data.durationSeconds !== undefined && data.durationSeconds > 0 && mergedLog.startTime) {
+      const startMs = new Date(mergedLog.startTime).getTime();
+      if (!isNaN(startMs)) {
+        const computedEndMs = startMs + mergedLog.durationSeconds * 1000;
+        mergedLog.endTime = getManilaIsoString(new Date(computedEndMs));
+        mergedLog.geoLocalEndTime = getManilaTimeString(new Date(computedEndMs));
+      }
+    }
+
+    // Save edited log ID to localStorage so incoming sheet sync won't overwrite Admin edits
+    try {
+      const editedIds: string[] = JSON.parse(localStorage.getItem('trackpulse_edited_ids') || '[]');
+      const lowerId = String(mergedLog.id).toLowerCase();
+      if (!editedIds.includes(lowerId)) {
+        editedIds.push(lowerId);
+        localStorage.setItem('trackpulse_edited_ids', JSON.stringify(editedIds));
+      }
+    } catch (e) {}
 
     setTimeLogs((prev) => {
       const updated = prev.map((l) => {

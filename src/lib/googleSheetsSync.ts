@@ -427,11 +427,12 @@ function forceTextColumns_(sheet, firstCol, numCols) {
 function sanitizeDuration_(reported, startTxt, endTxt, existing) {
   var d = Number(reported);
   if (!isFinite(d) || d < 0) d = Number(existing) || 0;
+  if (d > 0) return Math.min(Math.round(d), MAX_SESSION_SECONDS);
   var s = Date.parse(startTxt);
   var e = endTxt ? Date.parse(endTxt) : Date.now();
   if (!isNaN(s) && !isNaN(e)) {
     var span = Math.max(0, Math.round((e - s) / 1000));
-    if (d > span + 60) d = span;
+    d = span;
   }
   return Math.min(Math.round(d), MAX_SESSION_SECONDS);
 }
@@ -531,7 +532,17 @@ function doPost(e) {
   var skipLock = false;
   try {
     var act = String(JSON.parse(e.postData.contents).action || "").toUpperCase();
-    skipLock = act.indexOf("GET_") === 0 || act === "AUTH_LOGIN";
+    skipLock = act.indexOf("GET_") === 0 || 
+               act === "AUTH_LOGIN" || 
+               act === "SYNC_ALL" || 
+               act === "SYNC_TIMELOGS" || 
+               act === "UPDATE_TIMELOG" || 
+               act === "ADD_TIMELOG" || 
+               act === "DELETE_TIMELOG" || 
+               act === "ADMIN_RESET_PASSWORD" || 
+               act === "UPDATE_PASSWORD" || 
+               act === "ADD_EMPLOYEE" || 
+               act === "UPDATE_EMPLOYEE";
   } catch (parseErr) {}
 
   if (skipLock) return handlePost_(e);
@@ -1401,11 +1412,18 @@ function handlePost_(e) {
             var rowNum = uI + 2;
             if (newTask) timeLogsSheet.getRange(rowNum, 15).setValue(newTask);
             if (newStart) timeLogsSheet.getRange(rowNum, 7).setValue(newStart);
-            if (newEnd) timeLogsSheet.getRange(rowNum, 8).setValue(newEnd);
             if (newDurSec > 0) {
               timeLogsSheet.getRange(rowNum, 9).setValue(newDurSec);
               timeLogsSheet.getRange(rowNum, 10).setValue(formatDetailedDuration_(newDurSec));
+              var startRef = newStart || rowStart;
+              var parsedStart = Date.parse(startRef);
+              if (!newEnd && !isNaN(parsedStart)) {
+                var calcEnd = new Date(parsedStart + newDurSec * 1000);
+                newEnd = Utilities.formatDate(calcEnd, TZ, "yyyy-MM-dd HH:mm:ss");
+              }
             }
+            if (newEnd) timeLogsSheet.getRange(rowNum, 8).setValue(newEnd);
+            timeLogsSheet.getRange(rowNum, 14).setValue("completed");
 
             updatedCount++;
             affectedDailyKeys[rowDate + "|" + rowCode] = { date: rowDate, employeeCode: rowCode };
