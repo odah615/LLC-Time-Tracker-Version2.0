@@ -5,6 +5,7 @@ import {
   ScreenshotLog,
   IdleLog,
   LeaveRequest,
+  LeaveBalance,
   ManualTimeRequest,
   PayrollRecord,
   TaskCategory,
@@ -27,6 +28,8 @@ import {
   syncDataToGoogleSheetsWebhook,
   syncEmployeesToGoogleSheetsWebhook,
   syncAgentHeartbeatToSheets,
+  syncLeaveRequestToGoogleSheetsWebhook,
+  syncLeaveBalanceToGoogleSheetsWebhook,
   DEFAULT_SPREADSHEET_ID,
   DEFAULT_WEBHOOK_URL,
   fetchEmployeesFromGoogleSheets,
@@ -208,6 +211,7 @@ interface AppContextType {
   screenshots: ScreenshotLog[];
   idleLogs: IdleLog[];
   leaveRequests: LeaveRequest[];
+  leaveBalances: LeaveBalance[];
   manualTimeRequests: ManualTimeRequest[];
   payrollRecords: PayrollRecord[];
   worldClocks: WorldClockItem[];
@@ -250,6 +254,8 @@ interface AppContextType {
   approveLeaveRequest: (id: string) => void;
   rejectLeaveRequest: (id: string) => void;
   submitLeaveRequest: (req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>) => void;
+  updateLeaveRequestStatus: (id: string, status: LeaveRequest['status'], reviewerNotes?: string, actionedBy?: string) => void;
+  updateEmployeeLeaveBalance: (userId: string, updates: Partial<LeaveBalance>) => void;
   deleteScreenshot: (id: string) => void;
   toggleScreenshotBlur: (id: string) => void;
   updatePayrollStatus: (id: string, status: PayrollRecord['status']) => void;
@@ -413,7 +419,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [screenshots, setScreenshots] = useState<ScreenshotLog[]>([]);
   const [idleLogs, setIdleLogs] = useState<IdleLog[]>([]);
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(() => {
+    const saved = localStorage.getItem('trackpulse_leaverequests');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [leaveBalances, setLeaveBalances] = useState<LeaveBalance[]>(() => {
+    const saved = localStorage.getItem('trackpulse_leavebalances');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [manualTimeRequests, setManualTimeRequests] = useState<ManualTimeRequest[]>([]);
   const [payrollRecords, setPayrollRecords] = useState<PayrollRecord[]>(INITIAL_PAYROLL);
   const [dailyAttendanceLogs, setDailyAttendanceLogs] = useState<DailyAttendanceLog[]>([]);
@@ -2041,9 +2054,212 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectManualTimeRequest = (id: string) => {};
   const submitManualTimeRequest = (req: Omit<ManualTimeRequest, 'id' | 'status'>) => {};
 
-  const approveLeaveRequest = (id: string) => {};
-  const rejectLeaveRequest = (id: string) => {};
-  const submitLeaveRequest = (req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>) => {};
+  // Auto-initialize Leave Balances for all active employees
+  useEffect(() => {
+    if (users.length > 0) {
+      setLeaveBalances((prev) => {
+        const updated = [...prev];
+        let changed = false;
+        users.forEach((u) => {
+          if (!u.isSecretBackup) {
+            const exists = updated.find((b) => b.userId === u.id || b.employeeCode === u.employeeCode);
+            if (!exists) {
+              changed = true;
+              const isRegularRole = ['admin', 'team_lead', 'trainer', 'payroll', 'hr', 'qa'].includes(u.role);
+              const status = isRegularRole ? 'Regular' : 'Probationary';
+              const credits = isRegularRole ? 15 : 0;
+              const tl = users.find((t) => t.id === u.teamLeaderId || t.employeeCode === u.teamLeaderId);
+              updated.push({
+                id: u.employeeCode || u.id,
+                userId: u.id,
+                employeeCode: u.employeeCode || u.id,
+                username: u.username || u.name.toLowerCase().replace(/\s+/g, ''),
+                fullName: u.name,
+                supervisorName: tl ? tl.name : 'Sir Robin / Team Leader',
+                employmentStatus: status,
+                totalPaidLeaveCredits: credits,
+                usedPaidLeaveCredits: 0,
+                remainingPaidLeaveCredits: credits,
+                unpaidDaysUsed: 0,
+                lastUpdated: new Date().toISOString(),
+              });
+            }
+          }
+        });
+        if (changed) {
+          localStorage.setItem('trackpulse_leavebalances', JSON.stringify(updated));
+        }
+        return changed ? updated : prev;
+      });
+    }
+  }, [users]);
+
+  const submitLeaveRequest = (req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>) => {
+    const id = `leave_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const nowIso = new Date().toISOString();
+    const userBalance = leaveBalances.find(
+      (b) => b.userId === req.userId || b.employeeCode === (req.employeeCode || req.userId)
+    );
+
+    const fullReq: LeaveRequest = {
+      ...req,
+      id,
+      status: 'pending',
+      requestedAt: nowIso,
+      employmentStatus: req.employmentStatus || userBalance?.employmentStatus || 'Probationary',
+      teamLeaderName: req.teamLeaderName || userBalance?.supervisorName || 'Team Leader',
+      paidLeaveCreditsSnapshot:
+        req.paidLeaveCreditsSnapshot ??
+        userBalance?.remainingPaidLeaveCredits ??
+        (userBalance?.employmentStatus === 'Regular' ? 15 : 0),
+    };
+
+    setLeaveRequests((prev) => {
+      const updated = [fullReq, ...prev];
+      localStorage.setItem('trackpulse_leaverequests', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (db) {
+      safeSetDoc(doc(db, 'leaveRequests', id), fullReq).catch(() => {});
+    }
+
+    addAuditLog({
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      actorRole: currentUser.role,
+      category: 'Leave Submission',
+      details: `Filed ${fullReq.type} for ${fullReq.startDate} to ${fullReq.endDate} (${fullReq.totalDays} day(s))`,
+    });
+
+    if (googleSheetsWebhookUrl) {
+      syncLeaveRequestToGoogleSheetsWebhook(googleSheetsWebhookUrl, fullReq, 'SUBMIT_LEAVE').catch(() => {});
+    }
+  };
+
+  const updateLeaveRequestStatus = (
+    id: string,
+    newStatus: LeaveRequest['status'],
+    reviewerNotes?: string,
+    actionedBy?: string
+  ) => {
+    const nowIso = new Date().toISOString();
+    let targetLeave: LeaveRequest | undefined;
+
+    setLeaveRequests((prev) => {
+      const updated = prev.map((l) => {
+        if (l.id === id) {
+          targetLeave = {
+            ...l,
+            status: newStatus,
+            reviewerNotes: reviewerNotes || l.reviewerNotes,
+            actionedBy: actionedBy || `${currentUser.name} (${currentUser.role})`,
+            actionedById: currentUser.id,
+            actionedAt: nowIso,
+          };
+          return targetLeave;
+        }
+        return l;
+      });
+      localStorage.setItem('trackpulse_leaverequests', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (!targetLeave) return;
+    const activeLeave = targetLeave;
+
+    if (newStatus === 'approved') {
+      setLeaveBalances((prev) => {
+        const updated = prev.map((b) => {
+          if (
+            b.userId === activeLeave.userId ||
+            b.employeeCode === (activeLeave.employeeCode || activeLeave.userId)
+          ) {
+            if (activeLeave.type === 'Paid Leave') {
+              const deducted = activeLeave.totalDays || 1;
+              const newRemaining = Math.max(0, b.remainingPaidLeaveCredits - deducted);
+              const newUsed = b.usedPaidLeaveCredits + deducted;
+              const updatedB = {
+                ...b,
+                usedPaidLeaveCredits: newUsed,
+                remainingPaidLeaveCredits: newRemaining,
+                lastUpdated: nowIso,
+              };
+              if (db) {
+                safeSetDoc(doc(db, 'leaveBalances', b.id), updatedB).catch(() => {});
+              }
+              if (googleSheetsWebhookUrl) {
+                syncLeaveBalanceToGoogleSheetsWebhook(googleSheetsWebhookUrl, updatedB).catch(() => {});
+              }
+              return updatedB;
+            } else {
+              const addedUnpaid = activeLeave.totalDays || 1;
+              const updatedB = {
+                ...b,
+                unpaidDaysUsed: b.unpaidDaysUsed + addedUnpaid,
+                lastUpdated: nowIso,
+              };
+              if (db) {
+                safeSetDoc(doc(db, 'leaveBalances', b.id), updatedB).catch(() => {});
+              }
+              if (googleSheetsWebhookUrl) {
+                syncLeaveBalanceToGoogleSheetsWebhook(googleSheetsWebhookUrl, updatedB).catch(() => {});
+              }
+              return updatedB;
+            }
+          }
+          return b;
+        });
+        localStorage.setItem('trackpulse_leavebalances', JSON.stringify(updated));
+        return updated;
+      });
+    }
+
+    if (db) {
+      safeSetDoc(doc(db, 'leaveRequests', id), targetLeave).catch(() => {});
+    }
+
+    addAuditLog({
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      actorRole: currentUser.role,
+      category: newStatus === 'approved' ? 'Leave Request Approved' : 'Leave Request Rejected',
+      details: `${newStatus.toUpperCase()} leave request for ${targetLeave.userName} (${targetLeave.startDate} to ${targetLeave.endDate}). Notes: ${reviewerNotes || 'None'}`,
+    });
+
+    if (googleSheetsWebhookUrl) {
+      syncLeaveRequestToGoogleSheetsWebhook(googleSheetsWebhookUrl, targetLeave, 'UPDATE_LEAVE_STATUS').catch(() => {});
+    }
+  };
+
+  const approveLeaveRequest = (id: string) => {
+    updateLeaveRequestStatus(id, 'approved');
+  };
+
+  const rejectLeaveRequest = (id: string) => {
+    updateLeaveRequestStatus(id, 'rejected');
+  };
+
+  const updateEmployeeLeaveBalance = (userId: string, updates: Partial<LeaveBalance>) => {
+    const nowIso = new Date().toISOString();
+    setLeaveBalances((prev) => {
+      const updated = prev.map((b) => {
+        if (b.userId === userId || b.employeeCode === userId) {
+          const updatedB = { ...b, ...updates, lastUpdated: nowIso };
+          if (db) {
+            safeSetDoc(doc(db, 'leaveBalances', b.id), updatedB).catch(() => {});
+          }
+          if (googleSheetsWebhookUrl) {
+            syncLeaveBalanceToGoogleSheetsWebhook(googleSheetsWebhookUrl, updatedB).catch(() => {});
+          }
+          return updatedB;
+        }
+        return b;
+      });
+      localStorage.setItem('trackpulse_leavebalances', JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   const deleteScreenshot = (id: string) => {};
   const toggleScreenshotBlur = (id: string) => {};
@@ -2440,6 +2656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         screenshots,
         idleLogs,
         leaveRequests,
+        leaveBalances,
         manualTimeRequests,
         payrollRecords,
         worldClocks,
@@ -2482,6 +2699,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveLeaveRequest,
         rejectLeaveRequest,
         submitLeaveRequest,
+        updateLeaveRequestStatus,
+        updateEmployeeLeaveBalance,
         deleteScreenshot,
         toggleScreenshotBlur,
         updatePayrollStatus,

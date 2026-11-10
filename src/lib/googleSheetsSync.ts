@@ -1,4 +1,4 @@
-import { AuditLog, TimeLog, User, PayrollRecord, DailyAttendanceLog, IdleLog, LeaveRequest, UserPresence } from '../types';
+import { AuditLog, TimeLog, User, PayrollRecord, DailyAttendanceLog, IdleLog, LeaveRequest, LeaveBalance, UserPresence } from '../types';
 import { generateUniqueUsername, isPlaceholderName, deduplicateUsers, resolveCanonicalEmployee } from './userUtils';
 import { getManilaDateString } from './dateUtils';
 
@@ -354,6 +354,44 @@ export const SPREADSHEET_SCHEMA = [
       'Log Entries',
     ],
   },
+  {
+    tabName: 'Leave_Requests',
+    description: 'Master log of all leave applications submitted by agents, dates, total days, reason, approval status, remaining credits snapshot, reviewer notes, and action timestamps.',
+    headers: [
+      'Leave ID',
+      'Employee Code',
+      'Employee Name',
+      'Employment Status',
+      'Team Leader',
+      'Leave Type',
+      'Start Date',
+      'End Date',
+      'Total Days',
+      'Reason',
+      'Status',
+      'Remaining Paid Leave Credits',
+      'Actioned By',
+      'Reviewer Notes / Reason',
+      'Actioned At',
+      'Requested At',
+    ],
+  },
+  {
+    tabName: 'Leave_Balances',
+    description: 'Isolated directory of employee leave credit balances, employment status (Regular vs Probationary), assigned supervisor, total paid leave credits, used paid credits, remaining credits, and unpaid leave days taken.',
+    headers: [
+      'Employee Code',
+      'Username',
+      'Full Name',
+      'Supervisor Name',
+      'Employment Status',
+      'Total Paid Leave Credits',
+      'Used Paid Leave Credits',
+      'Remaining Paid Leave Credits',
+      'Unpaid Days Used',
+      'Last Updated',
+    ],
+  },
 ];
 
 export const generateAppsScriptCode = (spreadsheetId: string = DEFAULT_SPREADSHEET_ID) => {
@@ -539,6 +577,9 @@ function doPost(e) {
                act === "UPDATE_TIMELOG" || 
                act === "ADD_TIMELOG" || 
                act === "DELETE_TIMELOG" || 
+               act === "SUBMIT_LEAVE" ||
+               act === "UPDATE_LEAVE_STATUS" ||
+               act === "SYNC_LEAVE_BALANCES" ||
                act === "ADMIN_RESET_PASSWORD" || 
                act === "UPDATE_PASSWORD" || 
                act === "ADD_EMPLOYEE" || 
@@ -1746,9 +1787,198 @@ function handlePost_(e) {
       });
     }
 
+    if (action === "SUBMIT_LEAVE" || action === "UPDATE_LEAVE_STATUS" || action === "SYNC_LEAVE_REQUESTS") {
+      var leaves = data.leave ? [data.leave] : (data.leaves || (Array.isArray(data) ? data : []));
+      var leaveSheet = ss.getSheetByName("Leave_Requests") || ss.insertSheet("Leave_Requests");
+      var leaveHeaders = [
+        "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader",
+        "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status",
+        "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"
+      ];
+      if (leaveSheet.getLastRow() === 0) {
+        leaveSheet.appendRow(leaveHeaders);
+        formatHeaderRow(leaveSheet, leaveHeaders.length);
+      }
+      forceTextColumns_(leaveSheet, 7, 2);
+
+      var existingLeaveMap = {};
+      if (leaveSheet.getLastRow() > 1) {
+        var lData = leaveSheet.getRange(2, 1, leaveSheet.getLastRow() - 1, 1).getValues();
+        for (var lI = 0; lI < lData.length; lI++) {
+          var lKey = String(lData[lI][0] || "").trim();
+          if (lKey) existingLeaveMap[lKey] = lI + 2;
+        }
+      }
+
+      for (var lJ = 0; lJ < leaves.length; lJ++) {
+        var lev = leaves[lJ];
+        var lId = String(lev.id || "").trim();
+        if (!lId) continue;
+
+        var lRow = [
+          lId,
+          String(lev.employeeCode || lev.userId || "").trim(),
+          String(lev.userName || lev.fullName || "").trim(),
+          String(lev.employmentStatus || "Staff").trim(),
+          String(lev.teamLeaderName || "Team Leader").trim(),
+          String(lev.type || "Paid Leave").trim(),
+          String(lev.startDate || "").trim(),
+          String(lev.endDate || "").trim(),
+          Number(lev.totalDays || 1),
+          String(lev.reason || "").trim(),
+          String(lev.status || "pending").trim(),
+          lev.paidLeaveCreditsSnapshot !== undefined ? Number(lev.paidLeaveCreditsSnapshot) : "N/A",
+          String(lev.actionedBy || "").trim(),
+          String(lev.reviewerNotes || "").trim(),
+          String(lev.actionedAt || "").trim(),
+          String(lev.requestedAt || new Date().toISOString()).trim()
+        ];
+
+        var tRow = existingLeaveMap[lId] || -1;
+        if (tRow !== -1) {
+          leaveSheet.getRange(tRow, 1, 1, leaveHeaders.length).setValues([lRow]);
+        } else {
+          leaveSheet.appendRow(lRow);
+          existingLeaveMap[lId] = leaveSheet.getLastRow();
+        }
+
+        if (action === "SUBMIT_LEAVE") {
+          sendLeaveApplicationEmail_(ss, lev);
+        }
+      }
+
+      SpreadsheetApp.flush();
+      return jsonResponse({ status: "SUCCESS", action: action, count: leaves.length });
+    }
+
+    if (action === "SYNC_LEAVE_BALANCES" || action === "UPDATE_LEAVE_BALANCE") {
+      var balances = data.balances || (data.balance ? [data.balance] : (Array.isArray(data) ? data : []));
+      var balSheet = ss.getSheetByName("Leave_Balances") || ss.insertSheet("Leave_Balances");
+      var balHeaders = [
+        "Employee Code", "Username", "Full Name", "Supervisor Name", "Employment Status",
+        "Total Paid Leave Credits", "Used Paid Leave Credits", "Remaining Paid Leave Credits",
+        "Unpaid Days Used", "Last Updated"
+      ];
+      if (balSheet.getLastRow() === 0) {
+        balSheet.appendRow(balHeaders);
+        formatHeaderRow(balSheet, balHeaders.length);
+      }
+
+      var existingBalMap = {};
+      if (balSheet.getLastRow() > 1) {
+        var bData = balSheet.getRange(2, 1, balSheet.getLastRow() - 1, 2).getValues();
+        for (var bI = 0; bI < bData.length; bI++) {
+          var bCode = String(bData[bI][0] || "").trim().toUpperCase();
+          var bUser = String(bData[bI][1] || "").trim().toLowerCase();
+          var bRow = bI + 2;
+          if (bCode) existingBalMap[bCode] = bRow;
+          if (bUser) existingBalMap[bUser] = bRow;
+        }
+      }
+
+      for (var bJ = 0; bJ < balances.length; bJ++) {
+        var bal = balances[bJ];
+        var bEmpCode = String(bal.employeeCode || bal.userId || "").trim().toUpperCase();
+        var bUsername = String(bal.username || "").trim().toLowerCase();
+
+        var bTargetRow = (bEmpCode && existingBalMap[bEmpCode]) || (bUsername && existingBalMap[bUsername]) || -1;
+        var bRowData = [
+          bEmpCode,
+          bUsername,
+          String(bal.fullName || bal.name || "").trim(),
+          String(bal.supervisorName || bal.teamLeaderName || "Team Leader").trim(),
+          String(bal.employmentStatus || "Probationary").trim(),
+          Number(bal.totalPaidLeaveCredits || 0),
+          Number(bal.usedPaidLeaveCredits || 0),
+          Number(bal.remainingPaidLeaveCredits || 0),
+          Number(bal.unpaidDaysUsed || 0),
+          String(bal.lastUpdated || new Date().toISOString()).trim()
+        ];
+
+        if (bTargetRow !== -1) {
+          balSheet.getRange(bTargetRow, 1, 1, balHeaders.length).setValues([bRowData]);
+        } else {
+          balSheet.appendRow(bRowData);
+          var newBRow = balSheet.getLastRow();
+          if (bEmpCode) existingBalMap[bEmpCode] = newBRow;
+          if (bUsername) existingBalMap[bUsername] = newBRow;
+        }
+      }
+
+      SpreadsheetApp.flush();
+      return jsonResponse({ status: "SUCCESS", action: action, count: balances.length });
+    }
+
     return jsonResponse({ status: "ERROR", code: "UNKNOWN_ACTION", message: "Unknown action: " + action });
   } catch (err) {
     return jsonResponse({ status: "ERROR", error: err.message || err.toString() });
+  }
+}
+
+function sendLeaveApplicationEmail_(ss, leave) {
+  try {
+    var agentName = String(leave.userName || "Agent").trim();
+    var leaveType = String(leave.type || "Leave").trim();
+    var startDate = String(leave.startDate || "").trim();
+    var endDate = String(leave.endDate || "").trim();
+    var totalDays = Number(leave.totalDays) || 1;
+    var reason = String(leave.reason || "None provided").trim();
+    var empStatus = String(leave.employmentStatus || "Staff").trim();
+    var tlName = String(leave.teamLeaderName || "Team Leader").trim();
+    var creditsRemaining = leave.paidLeaveCreditsSnapshot !== undefined ? leave.paidLeaveCreditsSnapshot : "N/A";
+
+    var subject = "Leave Application: " + agentName + " - " + leaveType + " (" + startDate + " to " + endDate + ")";
+
+    var htmlBody = 
+      '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">' +
+        '<div style="background-color: #6b21a8; padding: 16px 20px; border-radius: 8px 8px 0 0; text-align: center;">' +
+          '<h2 style="color: #ffffff; margin: 0; font-size: 20px;">LLC Time Tracker — Leave Application</h2>' +
+        '</div>' +
+        '<div style="padding: 20px;">' +
+          '<p style="font-size: 14px; color: #334155;">Hello <strong>' + tlName + '</strong>,</p>' +
+          '<p style="font-size: 14px; color: #334155;"><strong>' + agentName + '</strong> has submitted a new leave application for your review on the Web Portal.</p>' +
+          '<table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13px; font-family: sans-serif;">' +
+            '<tr style="background-color: #f8fafc;"><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold; width: 40%;">Employee Name:</td><td style="padding: 10px; border: 1px solid #cbd5e1;">' + agentName + '</td></tr>' +
+            '<tr><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold;">Employment Status:</td><td style="padding: 10px; border: 1px solid #cbd5e1;">' + empStatus + '</td></tr>' +
+            '<tr style="background-color: #f8fafc;"><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold;">Leave Category:</td><td style="padding: 10px; border: 1px solid #cbd5e1; color: #6b21a8; font-weight: bold;">' + leaveType + '</td></tr>' +
+            '<tr><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold;">Dates Requested:</td><td style="padding: 10px; border: 1px solid #cbd5e1;">' + startDate + ' to ' + endDate + ' (' + totalDays + ' day' + (totalDays > 1 ? 's' : '') + ')</td></tr>' +
+            '<tr style="background-color: #f8fafc;"><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold;">Available Paid Credits:</td><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold; color: #15803d;">' + creditsRemaining + ' days</td></tr>' +
+            '<tr><td style="padding: 10px; border: 1px solid #cbd5e1; font-weight: bold;">Reason for Leave:</td><td style="padding: 10px; border: 1px solid #cbd5e1; font-style: italic;">"' + reason + '"</td></tr>' +
+          '</table>' +
+          '<p style="font-size: 13px; color: #475569;">Please log into the <strong>LLC Time Tracker Web Portal</strong> to click <strong>Approved</strong>, <strong>Declined</strong>, <strong>Re-Submit</strong>, or <strong>Cancel</strong> on this request.</p>' +
+        '</div>' +
+        '<div style="background-color: #f1f5f9; padding: 12px 20px; border-radius: 0 0 8px 8px; font-size: 11px; color: #64748b; text-align: center;">' +
+          'Automated notice dispatched via LLC Time Tracker V2. CC: Sir Robin Proxy (red.mchad@gmail.com) & HR Proxy (piaodahcam@gmail.com)' +
+        '</div>' +
+      '</div>';
+
+    var tlEmail = "";
+    var empSheet = ss.getSheetByName("Employee_Directory");
+    if (empSheet && empSheet.getLastRow() > 1) {
+      var cols = getEmployeeDirectoryCols(empSheet);
+      var rows = empSheet.getRange(2, 1, empSheet.getLastRow() - 1, cols.totalCols).getValues();
+      for (var r = 0; r < rows.length; r++) {
+        var rName = String(rows[r][cols.nameCol - 1] || "").trim().toLowerCase();
+        var rCode = String(rows[r][cols.codeCol - 1] || "").trim().toUpperCase();
+        var targetTl = String(leave.teamLeaderId || leave.teamLeaderName || "").trim().toLowerCase();
+        if (rName === targetTl || rCode === targetTl.toUpperCase()) {
+          tlEmail = String(rows[r][cols.emailCol - 1] || "").trim();
+          break;
+        }
+      }
+    }
+    if (!tlEmail) tlEmail = "red.mchad@gmail.com";
+
+    var ccEmails = "red.mchad@gmail.com, piaodahcam@gmail.com";
+
+    MailApp.sendEmail({
+      to: tlEmail,
+      cc: ccEmails,
+      subject: subject,
+      htmlBody: htmlBody
+    });
+  } catch (emailErr) {
+    Logger.log("Failed to send leave email: " + emailErr.message);
   }
 }
 
@@ -2660,6 +2890,73 @@ export const resetGoogleSpreadsheetData = async (
       success: false,
       message: `Failed to reset Google Sheets: ${err?.message || 'Network error'}`,
     };
+  }
+};
+
+export const syncLeaveRequestToGoogleSheetsWebhook = async (
+  webhookUrl: string,
+  leave: LeaveRequest,
+  action: 'SUBMIT_LEAVE' | 'UPDATE_LEAVE_STATUS' = 'SUBMIT_LEAVE'
+): Promise<{ success: boolean; message: string }> => {
+  if (!webhookUrl || !webhookUrl.trim()) {
+    return { success: false, message: 'No Google Sheets Webhook URL configured.' };
+  }
+  const cleanUrl = webhookUrl.trim();
+  try {
+    const payload = {
+      action,
+      leave,
+      secret: 'LLCTrackerV2SecretKey2026',
+      sharedSecret: 'LLCTrackerV2SecretKey2026',
+      syncedAt: new Date().toISOString(),
+    };
+    const proxyRes = await fetch('/api/sync-sheets', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
+    });
+    if (proxyRes.ok) {
+      const pData: any = await proxyRes.json();
+      if (pData && pData.success && pData.result?.status !== 'ERROR') {
+        return { success: true, message: 'Successfully synced leave request to Google Sheets!' };
+      }
+    }
+    return { success: false, message: 'Failed to sync leave request with Google Sheets via server proxy.' };
+  } catch (err: any) {
+    return { success: false, message: `Failed to connect to Google Sheets webhook: ${err?.message || 'Network error'}.` };
+  }
+};
+
+export const syncLeaveBalanceToGoogleSheetsWebhook = async (
+  webhookUrl: string,
+  balance: LeaveBalance
+): Promise<{ success: boolean; message: string }> => {
+  if (!webhookUrl || !webhookUrl.trim()) {
+    return { success: false, message: 'No Google Sheets Webhook URL configured.' };
+  }
+  const cleanUrl = webhookUrl.trim();
+  try {
+    const payload = {
+      action: 'SYNC_LEAVE_BALANCES',
+      balances: [balance],
+      secret: 'LLCTrackerV2SecretKey2026',
+      sharedSecret: 'LLCTrackerV2SecretKey2026',
+      syncedAt: new Date().toISOString(),
+    };
+    const proxyRes = await fetch('/api/sync-sheets', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
+    });
+    if (proxyRes.ok) {
+      const pData: any = await proxyRes.json();
+      if (pData && pData.success && pData.result?.status !== 'ERROR') {
+        return { success: true, message: 'Successfully synced leave balance to Google Sheets!' };
+      }
+    }
+    return { success: false, message: 'Failed to sync leave balance with Google Sheets via server proxy.' };
+  } catch (err: any) {
+    return { success: false, message: `Failed to connect to Google Sheets webhook: ${err?.message || 'Network error'}.` };
   }
 };
 

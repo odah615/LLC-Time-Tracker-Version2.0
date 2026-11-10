@@ -164,14 +164,38 @@ export interface IdleLog {
 export interface LeaveRequest {
   id: string;
   userId: string;
+  employeeCode?: string;
   userName: string;
-  type: 'Sick Leave' | 'Vacation' | 'Emergency' | 'Unpaid' | string;
-  startDate: string;
-  endDate: string;
+  employmentStatus?: 'Regular' | 'Probationary' | 'Training / Nesting' | string;
+  teamLeaderName?: string;
+  teamLeaderId?: string;
+  type: 'Paid Leave' | 'Unpaid Leave' | string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  totalDays: number;
   reason: string;
-  status: 'pending' | 'approved' | 'rejected';
-  requestedAt: string;
-  availableLeaveCredits?: number;
+  status: 'pending' | 'approved' | 'rejected' | 'resubmit' | 'cancelled';
+  requestedAt: string; // ISO string
+  paidLeaveCreditsSnapshot?: number;
+  actionedBy?: string; // Name & Role of reviewer/actor
+  actionedById?: string;
+  reviewerNotes?: string; // Reason/notes given during approval, decline, resubmit, or cancellation
+  actionedAt?: string; // ISO string
+}
+
+export interface LeaveBalance {
+  id: string; // Unique balance ID (matches employeeCode or userId)
+  userId: string;
+  employeeCode: string;
+  username: string;
+  fullName: string;
+  supervisorName: string;
+  employmentStatus: 'Regular' | 'Probationary' | 'Training / Nesting' | string;
+  totalPaidLeaveCredits: number;
+  usedPaidLeaveCredits: number;
+  remainingPaidLeaveCredits: number;
+  unpaidDaysUsed: number;
+  lastUpdated: string; // ISO string
 }
 
 export interface ManualTimeRequest {
