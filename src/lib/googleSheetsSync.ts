@@ -362,7 +362,7 @@ export const SPREADSHEET_SCHEMA = [
       'Employee Code',
       'Employee Name',
       'Employment Status',
-      'Team Leader',
+      'Team Leader / Supervisor',
       'Leave Type',
       'Start Date',
       'End Date',
@@ -1803,7 +1803,7 @@ function handlePost_(e) {
       var leaves = data.leave ? [data.leave] : (data.leaves || (Array.isArray(data) ? data : []));
       var leaveSheet = ss.getSheetByName("Leave_Requests") || ss.insertSheet("Leave_Requests");
       var leaveHeaders = [
-        "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader",
+        "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader / Supervisor",
         "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status",
         "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"
       ];
@@ -1832,7 +1832,7 @@ function handlePost_(e) {
           String(lev.employeeCode || lev.userId || "").trim(),
           String(lev.userName || lev.fullName || "").trim(),
           String(lev.employmentStatus || "Staff").trim(),
-          String(lev.teamLeaderName || "Team Leader").trim(),
+          String(lev.teamLeaderName || lev.supervisorName || lev.teamLeader || "Team Leader / Supervisor").trim(),
           String(lev.type || "Paid Leave").trim(),
           String(lev.startDate || "").trim(),
           String(lev.endDate || "").trim(),
@@ -2271,7 +2271,7 @@ function setupTextColumns() {
   if (e) forceTextColumns_(e, 7, 1);
 
   var lrHeaders = [
-    "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader",
+    "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader / Supervisor",
     "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status",
     "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"
   ];
@@ -2325,7 +2325,7 @@ function createAllTabsNow() {
     { name: "Daily_Attendance", headers: ["Log ID", "Date", "User ID", "Employee Code", "Employee Name", "Role", "First Check-in", "Last Check-out", "Total Duration", "Shift Status"] },
     { name: "Audit_Logs", headers: ["Log ID", "Timestamp (ISO)", "Category", "Actor ID", "Actor Name", "Actor Role", "Action Details", "IP / Device"] },
     { name: "Designation_Tasks", headers: ["Designation Name", "Allowed Tracking Tasks (Comma Separated)", "Total Tasks Count", "Last Updated (ISO)"] },
-    { name: "Leave_Requests", headers: ["Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader", "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status", "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"] },
+    { name: "Leave_Requests", headers: ["Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader / Supervisor", "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status", "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"] },
     { name: "Leave_Balances", headers: ["Employee Code", "Username", "Full Name", "Supervisor Name", "Employment Status", "Total Paid Leave Credits", "Used Paid Leave Credits", "Remaining Paid Leave Credits", "Unpaid Days Used", "Last Updated"] },
   ];
 
