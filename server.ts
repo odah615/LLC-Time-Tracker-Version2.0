@@ -1142,11 +1142,25 @@ app.post('/api/sync-sheets', async (req, res) => {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
 
-          const upstreamRes = await fetch(cleanUrl, {
+          const postBody = JSON.stringify(payload || { action: 'SYNC_ALL' });
+
+          let upstreamRes = await fetch(cleanUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload || { action: 'SYNC_ALL' }),
+            body: postBody,
+            redirect: 'manual',
           });
+
+          if (upstreamRes.status >= 300 && upstreamRes.status < 400) {
+            const redirectLocation = upstreamRes.headers.get('location');
+            if (redirectLocation) {
+              upstreamRes = await fetch(redirectLocation, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: postBody,
+              });
+            }
+          }
 
           const respText = await upstreamRes.text();
           const trimmed = respText.trim().toLowerCase();
@@ -1157,24 +1171,24 @@ app.post('/api/sync-sheets', async (req, res) => {
             trimmed.includes('google accounts') ||
             trimmed.includes('accounts.google.com')
           ) {
-            lastErr = 'Server is temporarily busy processing requests.';
+            lastErr = 'Google Apps Script Access Error: Ensure "Who has access" is set to "Anyone" in Web App deployment settings.';
             continue;
           }
 
           try {
             upstreamJson = JSON.parse(respText);
           } catch {
-            lastErr = 'Server returned temporary non-JSON response.';
+            lastErr = 'Apps Script returned non-JSON response. Check Script Property LLCTRACKERV2_SPREADSHEET_ID.';
             continue;
           }
 
           if (upstreamJson && upstreamJson.status !== 'ERROR') {
             break;
           } else {
-            lastErr = upstreamJson?.message || 'Apps Script reported temporary delay.';
+            lastErr = upstreamJson?.message || 'Apps Script reported temporary error.';
           }
         } catch (err: any) {
-          lastErr = err?.message || 'Network unreachable.';
+          lastErr = err?.message || 'Network connection to Google Apps Script failed.';
         }
       }
 
@@ -1185,7 +1199,12 @@ app.post('/api/sync-sheets', async (req, res) => {
           result: upstreamJson,
         });
       } else {
-        console.warn('[Sync-Sheets] Upstream push notice:', lastErr);
+        console.warn('[Sync-Sheets] Upstream push error:', lastErr);
+        return res.status(400).json({
+          success: false,
+          error: lastErr || 'Failed to sync with Google Sheets.',
+          message: lastErr || 'Failed to sync with Google Sheets.',
+        });
       }
     }
 

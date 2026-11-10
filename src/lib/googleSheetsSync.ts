@@ -2765,18 +2765,16 @@ export const syncDataToGoogleSheetsWebhook = async (
       headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
     });
-    if (proxyRes.ok) {
-      const pData: any = await proxyRes.json();
-      if (pData && pData.success && pData.result?.status !== 'ERROR') {
-        return {
-          success: true,
-          message: 'Successfully synchronized all logs and database tables to Google Sheets!',
-        };
-      }
+    const pData: any = await proxyRes.json().catch(() => ({}));
+    if (proxyRes.ok && pData && pData.success && pData.result?.status !== 'ERROR') {
+      return {
+        success: true,
+        message: 'Successfully synchronized all logs and database tables to Google Sheets!',
+      };
     }
     return {
       success: false,
-      message: 'Failed to sync with Google Sheets via server proxy.',
+      message: pData?.message || pData?.error || pData?.result?.message || 'Failed to sync with Google Sheets via server proxy.',
     };
   } catch (err: any) {
     return {
