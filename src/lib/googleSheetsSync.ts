@@ -2333,8 +2333,10 @@ function createAllTabsNow() {
     var sheet = ss.getSheetByName(t.name) || ss.insertSheet(t.name);
     if (sheet.getLastRow() === 0) {
       sheet.appendRow(t.headers);
-      formatHeaderRow(sheet, t.headers.length);
+    } else {
+      sheet.getRange(1, 1, 1, t.headers.length).setValues([t.headers]);
     }
+    formatHeaderRow(sheet, t.headers.length);
   });
 
   var dtSheet = ss.getSheetByName("Designation_Tasks");
@@ -2384,6 +2386,7 @@ function onOpen() {
   try {
     SpreadsheetApp.getUi()
       .createMenu("LLC Time Tracker")
+      .addItem("1-Click: Force Refresh All Header Rows", "createAllTabsNow")
       .addItem("1-Click: Reformat All Dates & Timestamps (Manila Time)", "reformatAllTimestampsManila")
       .addItem("1-Click: Push / Finalize Selected Row(s) Only", "finalizeSelectedRowsOnly")
       .addItem("1-Click: Clean Up & Auto-Close Stuck Sessions", "autoCloseStuckSessions")
