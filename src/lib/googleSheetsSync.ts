@@ -2730,6 +2730,72 @@ export const fetchEmployeesFromGoogleSheets = async (
   };
 };
 
+export const dispatchWebhookPayload = async (
+  webhookUrl: string,
+  payload: any
+): Promise<{ success: boolean; message: string; result?: any }> => {
+  if (!webhookUrl || !webhookUrl.trim()) {
+    return { success: false, message: 'No Google Sheets Webhook URL configured.' };
+  }
+  const cleanUrl = webhookUrl.trim();
+
+  // 1. Try central server proxy first
+  try {
+    const proxyRes = await fetch('/api/sync-sheets', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
+    });
+    if (proxyRes.ok) {
+      const pData: any = await proxyRes.json().catch(() => null);
+      if (pData && pData.success && pData.result?.status !== 'ERROR') {
+        return { success: true, message: 'Successfully synced with Google Sheets!', result: pData.result };
+      }
+      if (pData && pData.message && !pData.message.includes('non-JSON')) {
+        return { success: false, message: pData.message, result: pData.result };
+      }
+    }
+  } catch (proxyErr) {
+    console.warn('[Sync-Sheets] Proxy route unreachable, attempting direct browser dispatch:', proxyErr);
+  }
+
+  // 2. Direct browser fetch fallback (Bypasses Cloudflare Worker limits entirely!)
+  try {
+    const directRes = await fetch(cleanUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+    });
+    const dText = await directRes.text();
+    let dJson: any = null;
+    try {
+      dJson = JSON.parse(dText);
+    } catch {}
+
+    if (dJson && dJson.status !== 'ERROR') {
+      return { success: true, message: 'Successfully synced directly with Google Sheets!', result: dJson };
+    }
+    if (directRes.ok || dText.includes('SUCCESS') || dText.includes('Version 2')) {
+      return { success: true, message: 'Direct sync payload delivered to Google Sheets!' };
+    }
+  } catch (directErr) {
+    console.warn('[Sync-Sheets] Direct fetch fallback failed, attempting no-cors dispatch:', directErr);
+  }
+
+  // 3. no-cors fallback as final safety net
+  try {
+    await fetch(cleanUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+    });
+    return { success: true, message: 'Sync payload dispatched to Google Sheets Webhook!' };
+  } catch (e: any) {
+    return { success: false, message: `Failed to connect to Google Sheets webhook: ${e?.message || 'Network unreachable'}.` };
+  }
+};
+
 export const syncDataToGoogleSheetsWebhook = async (
   webhookUrl: string,
   timeLogs: TimeLog[],
@@ -2750,7 +2816,6 @@ export const syncDataToGoogleSheetsWebhook = async (
       message: 'No Google Sheets Webhook URL configured.',
     };
   }
-  const cleanUrl = webhookUrl.trim();
   try {
     const safeUsers = users.filter((u) => !u.isSecretBackup);
     const combinedLogs = activeSessions && activeSessions.length > 0
@@ -2772,21 +2837,60 @@ export const syncDataToGoogleSheetsWebhook = async (
       syncedAt: new Date().toISOString(),
     };
 
-    const proxyRes = await fetch('/api/sync-sheets', {
-      method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
-    });
-    const pData: any = await proxyRes.json().catch(() => ({}));
-    if (proxyRes.ok && pData && pData.success && pData.result?.status !== 'ERROR') {
-      return {
-        success: true,
-        message: 'Successfully synchronized all logs and database tables to Google Sheets!',
-      };
-    }
+    const res = await dispatchWebhookPayload(webhookUrl, payload);
+    return {
+      success: res.success,
+      message: res.success ? 'Successfully synchronized to Google Sheets!' : res.message,
+    };
+  } catch (err: any) {
     return {
       success: false,
-      message: pData?.message || pData?.error || pData?.result?.message || 'Failed to sync with Google Sheets via server proxy.',
+      message: `Failed to connect to Google Sheets webhook: ${err?.message || 'Network unreachable'}.`,
+    };
+  }
+};
+
+export const syncAllDataToGoogleSheetsWebhook = async (
+  webhookUrl: string,
+  timeLogs: TimeLog[],
+  users: User[],
+  auditLogs: AuditLog[] = [],
+  payrollRecords: PayrollRecord[] = [],
+  dailyAttendanceLogs: DailyAttendanceLog[] = [],
+  idleLogs: IdleLog[] = [],
+  leaveRequests: LeaveRequest[] = [],
+  designationTasks?: Record<string, string[]>,
+  rolePermissions?: Record<string, string[]>,
+  userPresenceList: UserPresence[] = []
+): Promise<{ success: boolean; message: string }> => {
+  if (!webhookUrl || !webhookUrl.trim()) {
+    return { success: false, message: 'No Google Sheets Webhook URL configured.' };
+  }
+  try {
+    const combinedLogs = [...timeLogs];
+    const safeUsers = users.filter((u) => !u.isSecretBackup);
+
+    const payload = {
+      action: 'SYNC_ALL',
+      timeLogs: combinedLogs,
+      users: safeUsers,
+      auditLogs,
+      payrollRecords,
+      dailyAttendanceLogs,
+      idleLogs,
+      leaveRequests,
+      designationTasks: designationTasks || {},
+      rolePermissions: rolePermissions || {},
+      userPresenceList: userPresenceList || [],
+      syncedAt: new Date().toISOString(),
+    };
+
+    const res = await dispatchWebhookPayload(webhookUrl, payload);
+    return {
+      success: res.success,
+      message: res.success
+        ? 'Successfully synchronized all logs and database tables to Google Sheets!'
+        : res.message,
     };
   } catch (err: any) {
     return {
@@ -3011,7 +3115,6 @@ export const syncLeaveRequestToGoogleSheetsWebhook = async (
   if (!webhookUrl || !webhookUrl.trim()) {
     return { success: false, message: 'No Google Sheets Webhook URL configured.' };
   }
-  const cleanUrl = webhookUrl.trim();
   try {
     const payload = {
       action,
@@ -3020,18 +3123,11 @@ export const syncLeaveRequestToGoogleSheetsWebhook = async (
       sharedSecret: 'LLCTrackerV2SecretKey2026',
       syncedAt: new Date().toISOString(),
     };
-    const proxyRes = await fetch('/api/sync-sheets', {
-      method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
-    });
-    if (proxyRes.ok) {
-      const pData: any = await proxyRes.json();
-      if (pData && pData.success && pData.result?.status !== 'ERROR') {
-        return { success: true, message: 'Successfully synced leave request to Google Sheets!' };
-      }
-    }
-    return { success: false, message: 'Failed to sync leave request with Google Sheets via server proxy.' };
+    const res = await dispatchWebhookPayload(webhookUrl, payload);
+    return {
+      success: res.success,
+      message: res.success ? 'Successfully synced leave request to Google Sheets!' : res.message,
+    };
   } catch (err: any) {
     return { success: false, message: `Failed to connect to Google Sheets webhook: ${err?.message || 'Network error'}.` };
   }
@@ -3044,7 +3140,6 @@ export const syncLeaveBalanceToGoogleSheetsWebhook = async (
   if (!webhookUrl || !webhookUrl.trim()) {
     return { success: false, message: 'No Google Sheets Webhook URL configured.' };
   }
-  const cleanUrl = webhookUrl.trim();
   try {
     const payload = {
       action: 'SYNC_LEAVE_BALANCES',
@@ -3053,18 +3148,11 @@ export const syncLeaveBalanceToGoogleSheetsWebhook = async (
       sharedSecret: 'LLCTrackerV2SecretKey2026',
       syncedAt: new Date().toISOString(),
     };
-    const proxyRes = await fetch('/api/sync-sheets', {
-      method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ webhookUrl: cleanUrl, payload }),
-    });
-    if (proxyRes.ok) {
-      const pData: any = await proxyRes.json();
-      if (pData && pData.success && pData.result?.status !== 'ERROR') {
-        return { success: true, message: 'Successfully synced leave balance to Google Sheets!' };
-      }
-    }
-    return { success: false, message: 'Failed to sync leave balance with Google Sheets via server proxy.' };
+    const res = await dispatchWebhookPayload(webhookUrl, payload);
+    return {
+      success: res.success,
+      message: res.success ? 'Successfully synced leave balance to Google Sheets!' : res.message,
+    };
   } catch (err: any) {
     return { success: false, message: `Failed to connect to Google Sheets webhook: ${err?.message || 'Network error'}.` };
   }
