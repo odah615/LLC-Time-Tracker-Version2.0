@@ -32,14 +32,22 @@ export const LeaveModal: React.FC<LeaveModalProps> = ({ isOpen, onClose }) => {
 
   // Resolve Supervisor Name
   const supervisorName = useMemo(() => {
-    if (userBalance?.supervisorName && userBalance.supervisorName !== 'Unassigned') {
+    if (userBalance?.supervisorName && userBalance.supervisorName !== 'Unassigned' && userBalance.supervisorName !== 'Sir Robin / Team Leader') {
       return userBalance.supervisorName;
     }
     if (currentUser.teamLeaderId) {
-      const tl = users.find((u) => u.id === currentUser.teamLeaderId || u.employeeCode === currentUser.teamLeaderId);
+      const rawTl = currentUser.teamLeaderId.trim();
+      const tl = users.find(
+        (u) =>
+          u.id.toLowerCase() === rawTl.toLowerCase() ||
+          u.employeeCode?.toLowerCase() === rawTl.toLowerCase() ||
+          u.username?.toLowerCase() === rawTl.toLowerCase() ||
+          u.name.toLowerCase() === rawTl.toLowerCase()
+      );
       if (tl) return tl.name;
+      return rawTl;
     }
-    return 'Sir Robin / Team Leader';
+    return 'Unassigned';
   }, [userBalance, currentUser, users]);
 
   // Last approved leave date

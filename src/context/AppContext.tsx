@@ -1477,7 +1477,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       designationTasks,
       rolePermissions,
       [],
-      userPresenceList
+      userPresenceList,
+      leaveBalances
     );
   };
 
@@ -2118,8 +2119,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (users.length > 0) {
       setLeaveBalances((prev) => {
-        const updated = [...prev];
         let changed = false;
+        const updated = prev.map((b) => {
+          const matchedUser = users.find((u) => u.id === b.userId || u.employeeCode === b.employeeCode);
+          if (matchedUser) {
+            let resolvedSupervisor = 'Unassigned';
+            if (matchedUser.teamLeaderId) {
+              const rawTl = matchedUser.teamLeaderId.trim();
+              const foundTl = users.find(
+                (t) =>
+                  t.id.toLowerCase() === rawTl.toLowerCase() ||
+                  t.employeeCode?.toLowerCase() === rawTl.toLowerCase() ||
+                  t.username?.toLowerCase() === rawTl.toLowerCase() ||
+                  t.name.toLowerCase() === rawTl.toLowerCase()
+              );
+              resolvedSupervisor = foundTl ? foundTl.name : rawTl;
+            }
+            if (b.supervisorName === 'Sir Robin / Team Leader' || b.supervisorName !== resolvedSupervisor) {
+              changed = true;
+              return { ...b, supervisorName: resolvedSupervisor };
+            }
+          }
+          return b;
+        });
+
         users.forEach((u) => {
           if (!u.isSecretBackup) {
             const exists = updated.find((b) => b.userId === u.id || b.employeeCode === u.employeeCode);
@@ -2128,14 +2151,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const isRegularRole = ['admin', 'team_lead', 'trainer', 'payroll', 'hr', 'qa'].includes(u.role);
               const status = isRegularRole ? 'Regular' : 'Probationary';
               const credits = isRegularRole ? 15 : 0;
-              const tl = users.find((t) => t.id === u.teamLeaderId || t.employeeCode === u.teamLeaderId);
+              let resolvedSupervisor = 'Unassigned';
+              if (u.teamLeaderId) {
+                const rawTl = u.teamLeaderId.trim();
+                const foundTl = users.find(
+                  (t) =>
+                    t.id.toLowerCase() === rawTl.toLowerCase() ||
+                    t.employeeCode?.toLowerCase() === rawTl.toLowerCase() ||
+                    t.username?.toLowerCase() === rawTl.toLowerCase() ||
+                    t.name.toLowerCase() === rawTl.toLowerCase()
+                );
+                resolvedSupervisor = foundTl ? foundTl.name : rawTl;
+              }
               updated.push({
                 id: u.employeeCode || u.id,
                 userId: u.id,
                 employeeCode: u.employeeCode || u.id,
                 username: u.username || u.name.toLowerCase().replace(/\s+/g, ''),
                 fullName: u.name,
-                supervisorName: tl ? tl.name : 'Sir Robin / Team Leader',
+                supervisorName: resolvedSupervisor,
                 employmentStatus: status,
                 totalPaidLeaveCredits: credits,
                 usedPaidLeaveCredits: 0,
@@ -2146,6 +2180,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
         });
+
         if (changed) {
           localStorage.setItem('trackpulse_leavebalances', JSON.stringify(updated));
         }

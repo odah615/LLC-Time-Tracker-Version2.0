@@ -1314,10 +1314,99 @@ function handlePost_(e) {
         if (cleanDate && cleanCode) affectedDailyKeys[cleanDate + "|" + cleanCode.toUpperCase()] = { date: cleanDate, employeeCode: cleanCode };
       }
 
-      Object.keys(affectedDailyKeys).forEach(function(key) {
-        var item = affectedDailyKeys[key];
-        rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
-      });
+      if (action === "SYNC_ALL") {
+        if (data.leaveRequests || data.leaves) {
+          var syncLeaves = data.leaveRequests || data.leaves;
+          if (Array.isArray(syncLeaves) && syncLeaves.length > 0) {
+            var lrSheet = ss.getSheetByName("Leave_Requests") || ss.insertSheet("Leave_Requests");
+            var lrHeaders = [
+              "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader / Supervisor",
+              "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status",
+              "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"
+            ];
+            if (lrSheet.getLastRow() === 0) { lrSheet.appendRow(lrHeaders); formatHeaderRow(lrSheet, lrHeaders.length); }
+            forceTextColumns_(lrSheet, 7, 2);
+            var existingLrMap = {};
+            if (lrSheet.getLastRow() > 1) {
+              var lrd = lrSheet.getRange(2, 1, lrSheet.getLastRow() - 1, 1).getValues();
+              for (var lri = 0; lri < lrd.length; lri++) {
+                var lrk = String(lrd[lri][0] || "").trim();
+                if (lrk) existingLrMap[lrk] = lri + 2;
+              }
+            }
+            for (var lrj = 0; lrj < syncLeaves.length; lrj++) {
+              var lev = syncLeaves[lrj];
+              var lId = String(lev.id || "").trim();
+              if (!lId) continue;
+              var lRow = [
+                lId,
+                String(lev.employeeCode || lev.userId || "").trim(),
+                String(lev.userName || lev.fullName || "").trim(),
+                String(lev.employmentStatus || "Staff").trim(),
+                String(lev.teamLeaderName || lev.supervisorName || lev.teamLeader || "Team Leader / Supervisor").trim(),
+                String(lev.type || "Paid Leave").trim(),
+                String(lev.startDate || "").trim(),
+                String(lev.endDate || "").trim(),
+                Number(lev.totalDays || 1),
+                String(lev.reason || "").trim(),
+                String(lev.status || "pending").trim(),
+                lev.paidLeaveCreditsSnapshot !== undefined ? Number(lev.paidLeaveCreditsSnapshot) : "N/A",
+                String(lev.actionedBy || "").trim(),
+                String(lev.reviewerNotes || "").trim(),
+                String(lev.actionedAt || "").trim(),
+                String(lev.requestedAt || new Date().toISOString()).trim()
+              ];
+              var tRow = existingLrMap[lId] || -1;
+              if (tRow !== -1) lrSheet.getRange(tRow, 1, 1, lrHeaders.length).setValues([lRow]);
+              else { lrSheet.appendRow(lRow); existingLrMap[lId] = lrSheet.getLastRow(); }
+            }
+          }
+        }
+
+        if (data.leaveBalances || data.balances) {
+          var syncBalances = data.leaveBalances || data.balances;
+          if (Array.isArray(syncBalances) && syncBalances.length > 0) {
+            var lbSheet = ss.getSheetByName("Leave_Balances") || ss.insertSheet("Leave_Balances");
+            var lbHeaders = [
+              "Employee Code", "Username", "Full Name", "Supervisor Name", "Employment Status",
+              "Total Paid Leave Credits", "Used Paid Leave Credits", "Remaining Paid Leave Credits",
+              "Unpaid Days Used", "Last Updated"
+            ];
+            if (lbSheet.getLastRow() === 0) { lbSheet.appendRow(lbHeaders); formatHeaderRow(lbSheet, lbHeaders.length); }
+            var existingLbMap = {};
+            if (lbSheet.getLastRow() > 1) {
+              var lbd = lbSheet.getRange(2, 1, lbSheet.getLastRow() - 1, 2).getValues();
+              for (var lbi = 0; lbi < lbd.length; lbi++) {
+                var lbc = String(lbd[lbi][0] || "").trim().toUpperCase();
+                var lbu = String(lbd[lbi][1] || "").trim().toLowerCase();
+                if (lbc) existingLbMap[lbc] = lbi + 2;
+                if (lbu) existingLbMap[lbu] = lbi + 2;
+              }
+            }
+            for (var lbj = 0; lbj < syncBalances.length; lbj++) {
+              var bal = syncBalances[lbj];
+              var bEmpCode = String(bal.employeeCode || bal.userId || "").trim().toUpperCase();
+              var bUsername = String(bal.username || "").trim().toLowerCase();
+              var bTargetRow = (bEmpCode && existingLbMap[bEmpCode]) || (bUsername && existingLbMap[bUsername]) || -1;
+              var bRowData = [
+                bEmpCode,
+                bUsername,
+                String(bal.fullName || bal.name || "").trim(),
+                String(bal.supervisorName || bal.teamLeaderName || "Team Leader / Supervisor").trim(),
+                String(bal.employmentStatus || "Probationary").trim(),
+                Number(bal.totalPaidLeaveCredits || 0),
+                Number(bal.usedPaidLeaveCredits || 0),
+                Number(bal.remainingPaidLeaveCredits || 0),
+                Number(bal.unpaidDaysUsed || 0),
+                String(bal.lastUpdated || new Date().toISOString()).trim()
+              ];
+              if (bTargetRow !== -1) lbSheet.getRange(bTargetRow, 1, 1, lbHeaders.length).setValues([bRowData]);
+              else { lbSheet.appendRow(bRowData); var newBRow = lbSheet.getLastRow(); if (bEmpCode) existingLbMap[bEmpCode] = newBRow; if (bUsername) existingLbMap[bUsername] = newBRow; }
+            }
+          }
+        }
+      }
+
       SpreadsheetApp.flush();
 
       return jsonResponse({
@@ -1325,7 +1414,7 @@ function handlePost_(e) {
         action: action,
         received: logs.length,
         timeLogsPersisted: mirrorRowsWritten,
-        sheetsUpdated: ["Time_Logs", "Daily_Summary"]
+        sheetsUpdated: ["Time_Logs", "Daily_Summary", "Leave_Requests", "Leave_Balances"]
       });
     }
 
@@ -2811,7 +2900,8 @@ export const syncDataToGoogleSheetsWebhook = async (
   designationTasks?: Record<string, string[]>,
   rolePermissions?: Record<string, import('../types').RolePermissions>,
   activeSessions?: TimeLog[],
-  userPresenceList?: UserPresence[]
+  userPresenceList?: UserPresence[],
+  leaveBalances: LeaveBalance[] = []
 ): Promise<{ success: boolean; message: string }> => {
   if (!webhookUrl || !webhookUrl.trim()) {
     return {
@@ -2834,6 +2924,7 @@ export const syncDataToGoogleSheetsWebhook = async (
       dailyAttendanceLogs,
       idleLogs,
       leaveRequests,
+      leaveBalances,
       designationTasks: designationTasks || {},
       rolePermissions: rolePermissions || {},
       userPresenceList: userPresenceList || [],
@@ -2864,7 +2955,8 @@ export const syncAllDataToGoogleSheetsWebhook = async (
   leaveRequests: LeaveRequest[] = [],
   designationTasks?: Record<string, string[]>,
   rolePermissions?: Record<string, string[]>,
-  userPresenceList: UserPresence[] = []
+  userPresenceList: UserPresence[] = [],
+  leaveBalances: LeaveBalance[] = []
 ): Promise<{ success: boolean; message: string }> => {
   if (!webhookUrl || !webhookUrl.trim()) {
     return { success: false, message: 'No Google Sheets Webhook URL configured.' };
@@ -2882,6 +2974,7 @@ export const syncAllDataToGoogleSheetsWebhook = async (
       dailyAttendanceLogs,
       idleLogs,
       leaveRequests,
+      leaveBalances,
       designationTasks: designationTasks || {},
       rolePermissions: rolePermissions || {},
       userPresenceList: userPresenceList || [],
