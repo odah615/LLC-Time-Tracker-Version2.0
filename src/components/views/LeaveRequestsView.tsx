@@ -15,6 +15,7 @@ import {
   Clock,
   User,
   Check,
+  Loader2,
 } from 'lucide-react';
 import { LeaveActionModal, LeaveActionType } from '../modals/LeaveActionModal';
 import { LeaveRequest, LeaveBalance } from '../../types';
@@ -32,6 +33,8 @@ export const LeaveRequestsView: React.FC<LeaveRequestsViewProps> = ({ onOpenLeav
     updateLeaveRequestStatus,
     updateEmployeeLeaveBalance,
     users,
+    reSubmitLeaveRequest,
+    setSaveToast,
   } = useApp();
 
   const [statusFilter, setStatusFilter] = useState<
@@ -42,6 +45,24 @@ export const LeaveRequestsView: React.FC<LeaveRequestsViewProps> = ({ onOpenLeav
   const [activeLeave, setActiveLeave] = useState<LeaveRequest | null>(null);
   const [activeAction, setActiveAction] = useState<LeaveActionType | null>(null);
   const [isAgentCancelling, setIsAgentCancelling] = useState(false);
+  const [reSubmittingId, setReSubmittingId] = useState<string | null>(null);
+
+  const handleReSubmit = async (leave: LeaveRequest) => {
+    setReSubmittingId(leave.id);
+    try {
+      const res = await reSubmitLeaveRequest(leave);
+      if (res.success) {
+        setSaveToast('✅ Leave Application Re-Submitted Successfully! Notification email sent to Team Leader and HR.');
+        setTimeout(() => setSaveToast(null), 5000);
+      } else {
+        alert('Unable to process leave request right now. Please cancel and submit a new request.');
+      }
+    } catch (err) {
+      alert('Unable to process leave request right now. Please cancel and submit a new request.');
+    } finally {
+      setReSubmittingId(null);
+    }
+  };
 
   // Edit Balance Drawer/Modal State for Admin/HR
   const [editingBalance, setEditingBalance] = useState<LeaveBalance | null>(null);
@@ -324,11 +345,17 @@ export const LeaveRequestsView: React.FC<LeaveRequestsViewProps> = ({ onOpenLeav
                                 <XCircle className="w-3 h-3" /> Decline
                               </button>
                               <button
-                                onClick={() => openActionModal(l, 'resubmit')}
-                                className="px-2 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] flex items-center gap-1 shadow-sm transition-all cursor-pointer"
-                                title="Request Re-Submit"
+                                onClick={() => handleReSubmit(l)}
+                                disabled={reSubmittingId === l.id}
+                                className="px-2 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] flex items-center gap-1 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                                title="Re-Submit & Sync Webhook/Email"
                               >
-                                <RefreshCw className="w-3 h-3" /> Re-Submit
+                                {reSubmittingId === l.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="w-3 h-3" />
+                                )}
+                                Re-Submit
                               </button>
                               <button
                                 onClick={() => openActionModal(l, 'cancelled')}
@@ -340,15 +367,30 @@ export const LeaveRequestsView: React.FC<LeaveRequestsViewProps> = ({ onOpenLeav
                             </>
                           )}
 
-                          {/* Agent Self-Service Action: Only CANCEL on pending requests */}
-                          {!isManagerRole && isMyOwnRequest && isPending && (
-                            <button
-                              onClick={() => openActionModal(l, 'cancelled', true)}
-                              className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm transition-all cursor-pointer"
-                              title="Cancel Request"
-                            >
-                              <Slash className="w-3.5 h-3.5" /> Cancel Request
-                            </button>
+                          {/* Agent Self-Service Actions */}
+                          {!isManagerRole && isMyOwnRequest && (isPending || isResubmit) && (
+                            <>
+                              <button
+                                onClick={() => handleReSubmit(l)}
+                                disabled={reSubmittingId === l.id}
+                                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                                title="Re-Submit & Dispatch Email Notice"
+                              >
+                                {reSubmittingId === l.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                )}
+                                Re-Submit
+                              </button>
+                              <button
+                                onClick={() => openActionModal(l, 'cancelled', true)}
+                                className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                                title="Cancel Request"
+                              >
+                                <Slash className="w-3.5 h-3.5" /> Cancel Request
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>

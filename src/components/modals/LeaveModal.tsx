@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { FileText, X, Check, Calendar, UserCheck, ShieldAlert, AlertCircle } from 'lucide-react';
+import { FileText, X, Check, Calendar, UserCheck, ShieldAlert, AlertCircle, Loader2 } from 'lucide-react';
 
 interface LeaveModalProps {
   isOpen: boolean;
@@ -71,9 +71,13 @@ export const LeaveModal: React.FC<LeaveModalProps> = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
+    setSuccessMessage('');
 
     if (!reason.trim()) {
       setFormError('Please provide a reason for your leave request.');
@@ -97,22 +101,38 @@ export const LeaveModal: React.FC<LeaveModalProps> = ({ isOpen, onClose }) => {
       return;
     }
 
-    submitLeaveRequest({
-      userId: currentUser.id,
-      employeeCode: currentUser.employeeCode || currentUser.id,
-      userName: currentUser.name,
-      employmentStatus,
-      teamLeaderName: supervisorName,
-      teamLeaderId: currentUser.teamLeaderId,
-      type: isRegular && type === 'Paid Leave' ? 'Paid Leave' : 'Unpaid Leave',
-      startDate,
-      endDate,
-      totalDays,
-      reason: reason.trim(),
-      paidLeaveCreditsSnapshot: remainingPaidCredits,
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await submitLeaveRequest({
+        userId: currentUser.id,
+        employeeCode: currentUser.employeeCode || currentUser.id,
+        userName: currentUser.name,
+        employmentStatus,
+        teamLeaderName: supervisorName,
+        teamLeaderId: currentUser.teamLeaderId,
+        type: isRegular && type === 'Paid Leave' ? 'Paid Leave' : 'Unpaid Leave',
+        startDate,
+        endDate,
+        totalDays,
+        reason: reason.trim(),
+        paidLeaveCreditsSnapshot: remainingPaidCredits,
+      });
 
-    onClose();
+      if (res.success) {
+        setSuccessMessage('✅ Leave Application Processed Successfully! Notification email sent to Team Leader and HR.');
+        setTimeout(() => {
+          setIsSubmitting(false);
+          setSuccessMessage('');
+          onClose();
+        }, 1800);
+      } else {
+        setFormError('Unable to process leave request right now. Please cancel and submit a new request.');
+        setIsSubmitting(false);
+      }
+    } catch (err) {
+      setFormError('Unable to process leave request right now. Please cancel and submit a new request.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -256,19 +276,36 @@ export const LeaveModal: React.FC<LeaveModalProps> = ({ isOpen, onClose }) => {
             </div>
           )}
 
+          {successMessage && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+              <Check className="w-4 h-4 shrink-0 text-emerald-600" />
+              {successMessage}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-semibold text-xs"
+              disabled={isSubmitting}
+              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-semibold text-xs disabled:opacity-50 cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold flex items-center gap-1.5 shadow-sm text-xs"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold flex items-center gap-1.5 shadow-sm text-xs disabled:opacity-60 cursor-pointer"
             >
-              <Check className="w-4 h-4" /> Submit Application
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> Submitting & Sending Email...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" /> Submit Application
+                </>
+              )}
             </button>
           </div>
         </form>

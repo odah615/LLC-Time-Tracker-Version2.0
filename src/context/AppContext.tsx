@@ -253,7 +253,8 @@ interface AppContextType {
   submitManualTimeRequest: (req: Omit<ManualTimeRequest, 'id' | 'status'>) => void;
   approveLeaveRequest: (id: string) => void;
   rejectLeaveRequest: (id: string) => void;
-  submitLeaveRequest: (req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>) => void;
+  submitLeaveRequest: (req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>) => Promise<{ success: boolean; message: string }>;
+  reSubmitLeaveRequest: (leave: LeaveRequest) => Promise<{ success: boolean; message: string }>;
   updateLeaveRequestStatus: (id: string, status: LeaveRequest['status'], reviewerNotes?: string, actionedBy?: string) => void;
   updateEmployeeLeaveBalance: (userId: string, updates: Partial<LeaveBalance>) => void;
   deleteScreenshot: (id: string) => void;
@@ -2189,7 +2190,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [users]);
 
-  const submitLeaveRequest = (req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>) => {
+  const submitLeaveRequest = async (
+    req: Omit<LeaveRequest, 'id' | 'status' | 'requestedAt'>
+  ): Promise<{ success: boolean; message: string }> => {
     const id = `leave_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const nowIso = new Date().toISOString();
     const userBalance = leaveBalances.find(
@@ -2235,8 +2238,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const activeWebhookUrl = getActiveWebhookUrl();
     if (activeWebhookUrl) {
-      syncLeaveRequestToGoogleSheetsWebhook(activeWebhookUrl, fullReq, 'SUBMIT_LEAVE').catch(() => {});
+      const res = await syncLeaveRequestToGoogleSheetsWebhook(activeWebhookUrl, fullReq, 'SUBMIT_LEAVE');
+      if (res.success) {
+        setSaveToast('✅ Leave Application Processed Successfully! Notification email sent to Team Leader and HR.');
+        setTimeout(() => setSaveToast(null), 5000);
+        return {
+          success: true,
+          message:
+            'Leave Application Processed Successfully! Your leave request has been recorded in the database (Leave_Requests) and a notification email has been dispatched to your Team Leader and HR.',
+        };
+      }
     }
+
+    return {
+      success: false,
+      message: 'Unable to process leave request right now. Please cancel and submit a new request.',
+    };
+  };
+
+  const reSubmitLeaveRequest = async (
+    leave: LeaveRequest
+  ): Promise<{ success: boolean; message: string }> => {
+    const activeWebhookUrl = getActiveWebhookUrl();
+    if (activeWebhookUrl) {
+      const res = await syncLeaveRequestToGoogleSheetsWebhook(activeWebhookUrl, leave, 'SUBMIT_LEAVE');
+      if (res.success) {
+        setSaveToast('✅ Leave Application Re-Submitted Successfully! Notification email sent to Team Leader and HR.');
+        setTimeout(() => setSaveToast(null), 5000);
+        return {
+          success: true,
+          message:
+            'Leave Application Re-Submitted Successfully! Your leave request has been pushed to the database (Leave_Requests) and a notification email has been dispatched to your Team Leader and HR.',
+        };
+      }
+    }
+    return {
+      success: false,
+      message: 'Unable to process leave request right now. Please cancel and submit a new request.',
+    };
   };
 
   const updateLeaveRequestStatus = (
@@ -2820,6 +2859,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveLeaveRequest,
         rejectLeaveRequest,
         submitLeaveRequest,
+        reSubmitLeaveRequest,
         updateLeaveRequestStatus,
         updateEmployeeLeaveBalance,
         deleteScreenshot,
