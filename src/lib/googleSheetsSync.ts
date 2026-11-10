@@ -425,9 +425,13 @@ function getLLCTRACKERV2Spreadsheet() {
   var sheetId = (props.getProperty("LLCTRACKERV2_SPREADSHEET_ID") || "${spreadsheetId || ''}").trim();
 
   if (!sheetId) {
+    try {
+      var active = SpreadsheetApp.getActiveSpreadsheet();
+      if (active) return active;
+    } catch (activeErr) {}
     throw new Error(
       "Configuration Error: LLCTRACKERV2_SPREADSHEET_ID Script Property is not set in Apps Script. " +
-      "Version 2 requires an explicit LLCTRACKERV2_SPREADSHEET_ID to isolate production spreadsheet data."
+      "Version 2 requires an explicit LLCTRACKERV2_SPREADSHEET_ID or a container-bound spreadsheet."
     );
   }
 
@@ -567,37 +571,45 @@ function normalizeEmployeeCodeKey_(value) {
 }
 
 function doPost(e) {
-  var skipLock = false;
   try {
-    var act = String(JSON.parse(e.postData.contents).action || "").toUpperCase();
-    skipLock = act.indexOf("GET_") === 0 || 
-               act === "AUTH_LOGIN" || 
-               act === "SYNC_ALL" || 
-               act === "SYNC_TIMELOGS" || 
-               act === "UPDATE_TIMELOG" || 
-               act === "ADD_TIMELOG" || 
-               act === "DELETE_TIMELOG" || 
-               act === "SUBMIT_LEAVE" ||
-               act === "UPDATE_LEAVE_STATUS" ||
-               act === "SYNC_LEAVE_BALANCES" ||
-               act === "ADMIN_RESET_PASSWORD" || 
-               act === "UPDATE_PASSWORD" || 
-               act === "ADD_EMPLOYEE" || 
-               act === "UPDATE_EMPLOYEE";
-  } catch (parseErr) {}
+    var skipLock = false;
+    try {
+      var act = String(JSON.parse(e.postData.contents).action || "").toUpperCase();
+      skipLock = act.indexOf("GET_") === 0 || 
+                 act === "AUTH_LOGIN" || 
+                 act === "SYNC_ALL" || 
+                 act === "SYNC_TIMELOGS" || 
+                 act === "UPDATE_TIMELOG" || 
+                 act === "ADD_TIMELOG" || 
+                 act === "DELETE_TIMELOG" || 
+                 act === "SUBMIT_LEAVE" ||
+                 act === "UPDATE_LEAVE_STATUS" ||
+                 act === "SYNC_LEAVE_BALANCES" ||
+                 act === "ADMIN_RESET_PASSWORD" || 
+                 act === "UPDATE_PASSWORD" || 
+                 act === "ADD_EMPLOYEE" || 
+                 act === "UPDATE_EMPLOYEE";
+    } catch (parseErr) {}
 
-  if (skipLock) return handlePost_(e);
+    if (skipLock) return handlePost_(e);
 
-  var lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(20000);
-  } catch (lockErr) {
-    return jsonResponse({ status: "ERROR", code: "BUSY", message: "Server busy, please retry." });
-  }
-  try {
-    return handlePost_(e);
-  } finally {
-    lock.releaseLock();
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(20000);
+    } catch (lockErr) {
+      return jsonResponse({ status: "ERROR", code: "BUSY", message: "Server busy, please retry." });
+    }
+    try {
+      return handlePost_(e);
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (globalErr) {
+    return jsonResponse({
+      status: "ERROR",
+      code: "SCRIPT_EXCEPTION",
+      message: globalErr.message || globalErr.toString()
+    });
   }
 }
 
