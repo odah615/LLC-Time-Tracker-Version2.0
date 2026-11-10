@@ -362,6 +362,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (err) {
         console.warn('Failed to load authoritative Google Sheets roster:', err);
       }
+
+      try {
+        const lRes = await fetch('/api/leave-requests');
+        if (lRes.ok) {
+          const lData = await lRes.json();
+          if (lData && Array.isArray(lData.leaveRequests) && lData.leaveRequests.length > 0) {
+            setLeaveRequests((prev) => {
+              const map = new Map<string, LeaveRequest>(prev.map((l) => [l.id, l]));
+              for (const item of lData.leaveRequests) {
+                map.set(item.id, item);
+              }
+              const merged = Array.from(map.values());
+              localStorage.setItem('trackpulse_leaverequests', JSON.stringify(merged));
+              return merged;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load server leave requests:', err);
+      }
+
+      try {
+        const bRes = await fetch('/api/leave-balances');
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (bData && Array.isArray(bData.leaveBalances) && bData.leaveBalances.length > 0) {
+            setLeaveBalances((prev) => {
+              const map = new Map<string, LeaveBalance>(prev.map((b) => [b.id || b.employeeCode || b.userId, b]));
+              for (const item of bData.leaveBalances) {
+                const key = item.id || item.employeeCode || item.userId;
+                if (key) map.set(key, item);
+              }
+              const merged = Array.from(map.values());
+              localStorage.setItem('trackpulse_leavebalances', JSON.stringify(merged));
+              return merged;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load server leave balances:', err);
+      }
     };
     loadAuthoritativeRoster();
   }, []);
@@ -444,11 +485,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [saveToast, setSaveToast] = useState<string | null>(null);
-  const [googleSheetsWebhookUrl, setGoogleSheetsWebhookUrlState] = useState<string>(DEFAULT_WEBHOOK_URL);
+  const [googleSheetsWebhookUrl, setGoogleSheetsWebhookUrlState] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('trackpulse_sheets_webhook');
+      if (saved && saved.trim()) return saved.trim();
+    }
+    return DEFAULT_WEBHOOK_URL;
+  });
+
+  const getActiveWebhookUrl = useCallback((): string => {
+    if (googleSheetsWebhookUrl && googleSheetsWebhookUrl.trim()) {
+      return googleSheetsWebhookUrl.trim();
+    }
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('trackpulse_sheets_webhook');
+      if (saved && saved.trim()) return saved.trim();
+    }
+    return '';
+  }, [googleSheetsWebhookUrl]);
 
   const setGoogleSheetsWebhookUrl = (url: string) => {
     setGoogleSheetsWebhookUrlState(url);
-    localStorage.setItem('trackpulse_sheets_webhook', url);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('trackpulse_sheets_webhook', url);
+    }
   };
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(INITIAL_AUDIT_LOGS);
@@ -2124,6 +2184,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       safeSetDoc(doc(db, 'leaveRequests', id), fullReq).catch(() => {});
     }
 
+    fetch('/api/leave-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([fullReq]),
+    }).catch((err) => console.warn('Server leave request post error:', err));
+
     addAuditLog({
       actorId: currentUser.id,
       actorName: currentUser.name,
@@ -2132,8 +2198,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       details: `Filed ${fullReq.type} for ${fullReq.startDate} to ${fullReq.endDate} (${fullReq.totalDays} day(s))`,
     });
 
-    if (googleSheetsWebhookUrl) {
-      syncLeaveRequestToGoogleSheetsWebhook(googleSheetsWebhookUrl, fullReq, 'SUBMIT_LEAVE').catch(() => {});
+    const activeWebhookUrl = getActiveWebhookUrl();
+    if (activeWebhookUrl) {
+      syncLeaveRequestToGoogleSheetsWebhook(activeWebhookUrl, fullReq, 'SUBMIT_LEAVE').catch(() => {});
     }
   };
 
@@ -2188,8 +2255,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (db) {
                 safeSetDoc(doc(db, 'leaveBalances', b.id), updatedB).catch(() => {});
               }
-              if (googleSheetsWebhookUrl) {
-                syncLeaveBalanceToGoogleSheetsWebhook(googleSheetsWebhookUrl, updatedB).catch(() => {});
+              fetch('/api/leave-balances', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify([updatedB]),
+              }).catch(() => {});
+              const activeWebhookUrl = getActiveWebhookUrl();
+              if (activeWebhookUrl) {
+                syncLeaveBalanceToGoogleSheetsWebhook(activeWebhookUrl, updatedB).catch(() => {});
               }
               return updatedB;
             } else {
@@ -2202,8 +2275,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (db) {
                 safeSetDoc(doc(db, 'leaveBalances', b.id), updatedB).catch(() => {});
               }
-              if (googleSheetsWebhookUrl) {
-                syncLeaveBalanceToGoogleSheetsWebhook(googleSheetsWebhookUrl, updatedB).catch(() => {});
+              fetch('/api/leave-balances', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify([updatedB]),
+              }).catch(() => {});
+              const activeWebhookUrl = getActiveWebhookUrl();
+              if (activeWebhookUrl) {
+                syncLeaveBalanceToGoogleSheetsWebhook(activeWebhookUrl, updatedB).catch(() => {});
               }
               return updatedB;
             }
@@ -2219,6 +2298,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       safeSetDoc(doc(db, 'leaveRequests', id), targetLeave).catch(() => {});
     }
 
+    fetch('/api/leave-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([targetLeave]),
+    }).catch(() => {});
+
     addAuditLog({
       actorId: currentUser.id,
       actorName: currentUser.name,
@@ -2227,8 +2312,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       details: `${newStatus.toUpperCase()} leave request for ${targetLeave.userName} (${targetLeave.startDate} to ${targetLeave.endDate}). Notes: ${reviewerNotes || 'None'}`,
     });
 
-    if (googleSheetsWebhookUrl) {
-      syncLeaveRequestToGoogleSheetsWebhook(googleSheetsWebhookUrl, targetLeave, 'UPDATE_LEAVE_STATUS').catch(() => {});
+    const activeWebhookUrl = getActiveWebhookUrl();
+    if (activeWebhookUrl) {
+      syncLeaveRequestToGoogleSheetsWebhook(activeWebhookUrl, targetLeave, 'UPDATE_LEAVE_STATUS').catch(() => {});
     }
   };
 

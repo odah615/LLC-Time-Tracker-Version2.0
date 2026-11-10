@@ -235,6 +235,8 @@ interface BridgeData {
   users: any[];
   attendance: any[];
   auditlogs: any[];
+  leaveRequests?: any[];
+  leaveBalances?: any[];
   tasks: Record<string, string[]>;
   permissions: Record<string, any>;
   config: { webhookUrl?: string; spreadsheetId?: string };
@@ -248,6 +250,8 @@ let bridgeState: BridgeData = {
   users: [],
   attendance: [],
   auditlogs: [],
+  leaveRequests: [],
+  leaveBalances: [],
   tasks: DEFAULT_DESIGNATION_TASKS,
   permissions: DEFAULT_ROLE_PERMISSIONS,
   config: {
@@ -269,6 +273,8 @@ try {
         users: Array.isArray(parsed.users) ? parsed.users : [],
         attendance: Array.isArray(parsed.attendance) ? parsed.attendance : [],
         auditlogs: Array.isArray(parsed.auditlogs) ? parsed.auditlogs : [],
+        leaveRequests: Array.isArray(parsed.leaveRequests) ? parsed.leaveRequests : [],
+        leaveBalances: Array.isArray(parsed.leaveBalances) ? parsed.leaveBalances : [],
         tasks: parsed.tasks || DEFAULT_DESIGNATION_TASKS,
         permissions: parsed.permissions || DEFAULT_ROLE_PERMISSIONS,
         config: parsed.config || { webhookUrl: '', spreadsheetId: '' },
@@ -1061,6 +1067,63 @@ app.get('/api/monthly-summary', (req, res) => {
   });
 
   res.json({ success: true, monthlySummaries });
+});
+
+app.get('/api/leave-requests', (req, res) => {
+  res.json({ success: true, leaveRequests: bridgeState.leaveRequests || [] });
+});
+
+app.post('/api/leave-requests', (req, res) => {
+  const incoming = req.body;
+  const list = Array.isArray(incoming) ? incoming : (incoming && incoming.id ? [incoming] : []);
+  if (list.length === 0) return res.status(400).json({ error: 'Invalid leave request payload' });
+
+  if (!bridgeState.leaveRequests) bridgeState.leaveRequests = [];
+  const map = new Map<string, any>(bridgeState.leaveRequests.map((l) => [l.id, l]));
+  for (const item of list) {
+    if (item && item.id) map.set(item.id, item);
+  }
+  bridgeState.leaveRequests = Array.from(map.values());
+  persistBridgeState();
+
+  const scriptUrl = process.env.APPS_SCRIPT_URL || bridgeState.config.webhookUrl;
+  if (scriptUrl && list.length > 0) {
+    const leaveItem = list[0];
+    const action = leaveItem.action || (leaveItem.status === 'pending' ? 'SUBMIT_LEAVE' : 'UPDATE_LEAVE_STATUS');
+    fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: process.env.LLCTRACKERV2_SHARED_SECRET || 'LLCTrackerV2SecretKey2026',
+        sharedSecret: process.env.LLCTRACKERV2_SHARED_SECRET || 'LLCTrackerV2SecretKey2026',
+        action,
+        leave: leaveItem,
+      }),
+    }).catch((err) => console.warn('Sync leave error in server:', err));
+  }
+
+  res.json({ success: true, count: bridgeState.leaveRequests.length });
+});
+
+app.get('/api/leave-balances', (req, res) => {
+  res.json({ success: true, leaveBalances: bridgeState.leaveBalances || [] });
+});
+
+app.post('/api/leave-balances', (req, res) => {
+  const incoming = req.body;
+  const list = Array.isArray(incoming) ? incoming : (incoming && (incoming.id || incoming.userId || incoming.employeeCode) ? [incoming] : []);
+  if (list.length === 0) return res.status(400).json({ error: 'Invalid leave balance payload' });
+
+  if (!bridgeState.leaveBalances) bridgeState.leaveBalances = [];
+  const map = new Map<string, any>(bridgeState.leaveBalances.map((b) => [b.id || b.employeeCode || b.userId, b]));
+  for (const item of list) {
+    const key = item.id || item.employeeCode || item.userId;
+    if (key) map.set(key, item);
+  }
+  bridgeState.leaveBalances = Array.from(map.values());
+  persistBridgeState();
+
+  res.json({ success: true, count: bridgeState.leaveBalances.length });
 });
 
 app.get('/api/users', (req, res) => {
