@@ -2257,7 +2257,31 @@ function setupTextColumns() {
   if (au) forceTextColumns_(au, 2, 1);
   var e = ss.getSheetByName("Employee_Directory");
   if (e) forceTextColumns_(e, 7, 1);
-  Logger.log("Text columns set.");
+
+  var lrHeaders = [
+    "Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader",
+    "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status",
+    "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"
+  ];
+  var lr = ss.getSheetByName("Leave_Requests") || ss.insertSheet("Leave_Requests");
+  if (lr.getLastRow() === 0) {
+    lr.appendRow(lrHeaders);
+    formatHeaderRow(lr, lrHeaders.length);
+  }
+  forceTextColumns_(lr, 7, 2);
+
+  var lbHeaders = [
+    "Employee Code", "Username", "Full Name", "Supervisor Name", "Employment Status",
+    "Total Paid Leave Credits", "Used Paid Leave Credits", "Remaining Paid Leave Credits",
+    "Unpaid Days Used", "Last Updated"
+  ];
+  var lb = ss.getSheetByName("Leave_Balances") || ss.insertSheet("Leave_Balances");
+  if (lb.getLastRow() === 0) {
+    lb.appendRow(lbHeaders);
+    formatHeaderRow(lb, lbHeaders.length);
+  }
+
+  Logger.log("Text columns and Leave tabs initialized successfully.");
 }
 
 function repairBadDurations() {
@@ -2289,6 +2313,8 @@ function createAllTabsNow() {
     { name: "Daily_Attendance", headers: ["Log ID", "Date", "User ID", "Employee Code", "Employee Name", "Role", "First Check-in", "Last Check-out", "Total Duration", "Shift Status"] },
     { name: "Audit_Logs", headers: ["Log ID", "Timestamp (ISO)", "Category", "Actor ID", "Actor Name", "Actor Role", "Action Details", "IP / Device"] },
     { name: "Designation_Tasks", headers: ["Designation Name", "Allowed Tracking Tasks (Comma Separated)", "Total Tasks Count", "Last Updated (ISO)"] },
+    { name: "Leave_Requests", headers: ["Leave ID", "Employee Code", "Employee Name", "Employment Status", "Team Leader", "Leave Type", "Start Date", "End Date", "Total Days", "Reason", "Status", "Remaining Paid Leave Credits", "Actioned By", "Reviewer Notes / Reason", "Actioned At", "Requested At"] },
+    { name: "Leave_Balances", headers: ["Employee Code", "Username", "Full Name", "Supervisor Name", "Employment Status", "Total Paid Leave Credits", "Used Paid Leave Credits", "Remaining Paid Leave Credits", "Unpaid Days Used", "Last Updated"] },
   ];
 
   tabs.forEach(function(t) {
@@ -2340,13 +2366,14 @@ function createAllTabsNow() {
 }
 
 /**
- * Custom Top Menu for Google Sheets
+ * Custom Top Menu for Google Sheets (Replaces your existing onOpen)
  */
 function onOpen() {
   try {
     SpreadsheetApp.getUi()
       .createMenu("LLC Time Tracker")
       .addItem("1-Click: Reformat All Dates & Timestamps (Manila Time)", "reformatAllTimestampsManila")
+      .addItem("1-Click: Push / Finalize Selected Row(s) Only", "finalizeSelectedRowsOnly")
       .addItem("1-Click: Clean Up & Auto-Close Stuck Sessions", "autoCloseStuckSessions")
       .addItem("1-Click: Rebuild All Summaries (Daily, Weekly, Monthly)", "rebuildAllSummariesManual")
       .addSeparator()
@@ -2487,13 +2514,14 @@ function reformatAllTimestampsManila() {
 }
 
 /**
- * Clean Up & Auto-Close Stuck Sessions
+ * Clean Up & Auto-Close Stuck Sessions (Patched for Real Elapsed Time)
  */
 function autoCloseStuckSessions() {
   var ss = getLLCTRACKERV2Spreadsheet();
   var sh = ss.getSheetByName("Time_Logs");
   var cleanedCount = 0;
   var affectedDailyKeys = {};
+  var now = new Date();
 
   if (sh && sh.getLastRow() > 1) {
     var lastRow = sh.getLastRow();
@@ -2502,23 +2530,20 @@ function autoCloseStuckSessions() {
     for (var i = 0; i < data.length; i++) {
       var status = String(data[i][13] || "").toLowerCase().trim();
       var startTimeStr = data[i][6];
-      var grossSec = Number(data[i][8]) || 0;
       var dateStr = normalizeLogDate_(data[i][5]);
       var empCode = String(data[i][1] || "").trim().toUpperCase();
 
       if (status === "running" || status.indexOf("in progress") !== -1) {
         var startTime = new Date(startTimeStr);
-        if (!isNaN(startTime.getTime())) {
-          var calculatedEndMs = startTime.getTime() + (grossSec > 0 ? grossSec * 1000 : 0);
-          var endDate = new Date(calculatedEndMs);
-
-          var formattedEndTime = Utilities.formatDate(endDate, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
-          var durStr = Math.floor(grossSec / 3600) + "h " +
-                       Math.floor((grossSec % 3600) / 60) + "m " +
-                       (grossSec % 60) + "s";
+        if (!isNaN(startTime.getTime()) && startTime.getTime() <= now.getTime()) {
+          var realGrossSec = Math.max(1, Math.floor((now.getTime() - startTime.getTime()) / 1000));
+          var formattedEndTime = Utilities.formatDate(now, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
+          var durStr = Math.floor(realGrossSec / 3600) + "h " +
+                       Math.floor((realGrossSec % 3600) / 60) + "m " +
+                       (realGrossSec % 60) + "s";
 
           sh.getRange(i + 2, 8).setValue(formattedEndTime);
-          sh.getRange(i + 2, 9).setValue(grossSec);
+          sh.getRange(i + 2, 9).setValue(realGrossSec);
           sh.getRange(i + 2, 10).setValue(durStr);
           sh.getRange(i + 2, 14).setValue("completed");
           cleanedCount++;
@@ -2531,11 +2556,10 @@ function autoCloseStuckSessions() {
     }
   }
 
-  // Also check Daily_Summary tab for any stuck "In Progress" rows
   var dailySheet = ss.getSheetByName("Daily_Summary");
   if (dailySheet && dailySheet.getLastRow() > 1) {
     var dData = dailySheet.getRange(2, 1, dailySheet.getLastRow() - 1, 14).getValues();
-    var todayManila = Utilities.formatDate(new Date(), "Asia/Manila", "yyyy-MM-dd");
+    var todayManila = Utilities.formatDate(now, "Asia/Manila", "yyyy-MM-dd");
     for (var d = 0; d < dData.length; d++) {
       var dDate = normalizeLogDate_(dData[d][0]);
       var dCode = String(dData[d][1] || "").trim().toUpperCase();
@@ -2556,7 +2580,7 @@ function autoCloseStuckSessions() {
   }
 
   try {
-    SpreadsheetApp.getUi().alert("Cleaned up and auto-closed " + cleanedCount + " stuck running sessions and updated Daily Summaries!");
+    SpreadsheetApp.getUi().alert("Cleaned up and auto-closed " + cleanedCount + " stuck running sessions with FULL real-time hours, and updated Daily Summaries!");
   } catch (e) {
     Logger.log("Cleaned up " + cleanedCount + " sessions.");
   }
@@ -2582,6 +2606,82 @@ function setupDailyAutoCleanupTrigger() {
 
   try {
     SpreadsheetApp.getUi().alert("Daily 11:50 PM Auto-Cleanup Trigger successfully configured!");
+  } catch (e) {}
+}
+
+/**
+ * 1-Click: Push / Finalize Selected Row(s) Only
+ */
+function finalizeSelectedRowsOnly() {
+  var ss = getLLCTRACKERV2Spreadsheet();
+  var sh = ss.getActiveSheet();
+  if (!sh || sh.getName() !== "Time_Logs") {
+    try {
+      SpreadsheetApp.getUi().alert("Please switch to the 'Time_Logs' tab and select the row(s) you wish to push/finalize.");
+    } catch (e) {}
+    return;
+  }
+
+  var range = sh.getSelection().getActiveRange();
+  if (!range) {
+    try {
+      SpreadsheetApp.getUi().alert("Please click or select at least one row in the Time_Logs sheet.");
+    } catch (e) {}
+    return;
+  }
+
+  var startRow = range.getRow();
+  var numRows = range.getNumRows();
+  if (startRow <= 1) {
+    startRow = 2;
+    numRows = Math.max(0, numRows - 1);
+  }
+  if (numRows <= 0) return;
+
+  var now = new Date();
+  var data = sh.getRange(startRow, 1, numRows, 16).getValues();
+  var finalizedCount = 0;
+  var affectedDailyKeys = {};
+
+  for (var i = 0; i < data.length; i++) {
+    var currentRowNum = startRow + i;
+    var status = String(data[i][13] || "").toLowerCase().trim();
+    var startTimeStr = data[i][6];
+    var dateStr = normalizeLogDate_(data[i][5]);
+    var empCode = String(data[i][1] || "").trim().toUpperCase();
+
+    if (status === "running" || status.indexOf("in progress") !== -1) {
+      var startTime = new Date(startTimeStr);
+      var startMs = !isNaN(startTime.getTime()) ? startTime.getTime() : now.getTime();
+      var realGrossSec = Math.max(1, Math.floor((now.getTime() - startMs) / 1000));
+      var formattedEndTime = Utilities.formatDate(now, "Asia/Manila", "yyyy-MM-dd hh:mm:ss a");
+      var durStr = Math.floor(realGrossSec / 3600) + "h " +
+                   Math.floor((realGrossSec % 3600) / 60) + "m " +
+                   (realGrossSec % 60) + "s";
+
+      sh.getRange(currentRowNum, 8).setValue(formattedEndTime);
+      sh.getRange(currentRowNum, 9).setValue(realGrossSec);
+      sh.getRange(currentRowNum, 10).setValue(durStr);
+      sh.getRange(currentRowNum, 14).setValue("completed");
+      finalizedCount++;
+
+      if (dateStr && empCode) {
+        affectedDailyKeys[dateStr + "|" + empCode] = { date: dateStr, employeeCode: empCode };
+      }
+    }
+  }
+
+  Object.keys(affectedDailyKeys).forEach(function(key) {
+    var item = affectedDailyKeys[key];
+    rebuildDailySummaryRow_(ss, item.date, item.employeeCode);
+  });
+
+  if (finalizedCount > 0) {
+    rebuildWeeklyMonthlySummaries_(ss);
+  }
+
+  try {
+    SpreadsheetApp.getUi().alert("Successfully pushed and finalized " + finalizedCount + " selected running session(s)!");
   } catch (e) {}
 }
 `;
