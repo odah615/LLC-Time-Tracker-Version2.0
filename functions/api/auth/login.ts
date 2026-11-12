@@ -33,11 +33,20 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
       password,
     };
 
-    const upstreamRes = await fetch(scriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    let upstreamRes: Response;
+    try {
+      upstreamRes = await fetch(scriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const respText = await upstreamRes.text();
     let data: any = {};

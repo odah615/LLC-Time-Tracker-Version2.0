@@ -471,11 +471,11 @@ app.post('/api/auth/change-password', (req, res) => {
   const existing = bridgeState.users[userIdx];
   const updatedUser = {
     ...existing,
+    password: trimmed,
     passwordHash: newHash,
     isPasswordChanged: 'YES' as const,
     mustChangePassword: false,
   };
-  delete updatedUser.password;
   bridgeState.users[userIdx] = updatedUser;
   persistBridgeState();
 

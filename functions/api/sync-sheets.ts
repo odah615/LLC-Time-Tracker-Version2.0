@@ -42,13 +42,22 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
 
-        const upstreamRes = await fetch(scriptUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(scriptPayload),
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-        const respText = await upstreamRes.text();
+        let upstreamRes: Response;
+        let respText = '';
+        try {
+          upstreamRes = await fetch(scriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(scriptPayload),
+            signal: controller.signal,
+          });
+          respText = await upstreamRes.text();
+        } finally {
+          clearTimeout(timeoutId);
+        }
 
         if (isHtmlResponse(respText)) {
           lastError = 'Server is temporarily busy processing requests. Retrying automatically...';

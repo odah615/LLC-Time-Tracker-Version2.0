@@ -1,0 +1,6 @@
+name = "llc-time-tracker-version2"
+compatibility_date = "2024-01-01"
+pages_build_output_dir = "dist"
+
+[limits]
+cpu_ms = 300_000
