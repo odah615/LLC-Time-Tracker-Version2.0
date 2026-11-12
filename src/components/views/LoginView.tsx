@@ -79,12 +79,27 @@ export const LoginView: React.FC = () => {
 
     setIsLoggingIn(true);
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ usernameOrCode: cleanCode, password }),
-      });
-      const data: any = await resp.json().catch(() => null);
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId));
+
+      if (resp.status === 524 || resp.status === 504 || resp.status === 502) {
+        setErrorMsg('Authentication server timeout (Cloudflare Error 524). The server took too long to respond. Please try signing in again.');
+        setIsLoggingIn(false);
+        return;
+      }
+
+      const text = await resp.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(text);
+      } catch {}
 
       if (resp.ok && data && data.success && data.user) {
         const matchedUser: User = data.user;
@@ -105,10 +120,19 @@ export const LoginView: React.FC = () => {
         login(matchedUser, resolvedMode, token);
         return;
       }
-      setErrorMsg(data?.error || 'Login rejected: Invalid credentials.');
+
+      if (text.includes('524') || text.includes('timeout')) {
+        setErrorMsg('Authentication server timeout (Cloudflare Error 524). Please try signing in again.');
+      } else {
+        setErrorMsg(data?.error || data?.message || 'Login rejected: Invalid credentials or user not found.');
+      }
       setIsLoggingIn(false);
     } catch (err: any) {
-      setErrorMsg(`Unable to connect to authentication server (${err?.message || 'Network error'}). Please try again.`);
+      if (err.name === 'AbortError') {
+        setErrorMsg('Authentication request timed out after 15 seconds. Please try signing in again.');
+      } else {
+        setErrorMsg(`Unable to connect to authentication server (${err?.message || 'Network error'}). Please try again.`);
+      }
       setIsLoggingIn(false);
     }
   };
