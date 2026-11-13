@@ -81,6 +81,153 @@ export function getDeterministicLogId(l: any): string {
   return `log-${emp}-${date}-${task}-${dur}`;
 }
 
+function isSupervisorOrAdminRole(user?: User | null): boolean {
+  if (!user) return false;
+  if ((user as any).isSuperAdmin) return true;
+  const role = String(user.role || '').trim().toLowerCase();
+  return ['admin', 'va_admin', 'team_lead', 'trainer', 'hr', 'payroll', 'qa'].includes(role);
+}
+
+function matchesAgentRecord(log: Partial<TimeLog>, user: User): boolean {
+  const uCode = String(user.employeeCode || '').trim().toUpperCase();
+  const uDigits = uCode.replace(/\D/g, '');
+  const uId = String(user.id || '').trim().toLowerCase();
+  const uName = String(user.name || '').trim().toLowerCase();
+  const uUsername = String(user.username || '').trim().toLowerCase();
+
+  const lCode = String(log.employeeCode || '').trim().toUpperCase();
+  const lDigits = lCode.replace(/\D/g, '');
+  const lUserId = String(log.userId || '').trim().toLowerCase();
+  const lName = String(log.userName || '').trim().toLowerCase();
+
+  if (uCode && lCode && uCode === lCode) return true;
+  if (uDigits && lDigits && Number(uDigits) === Number(lDigits)) return true;
+  if (uId && lUserId && uId === lUserId) return true;
+  if (uUsername && (lUserId === uUsername || lCode.toLowerCase() === uUsername)) return true;
+  if (uName && lName && uName === lName) return true;
+  return false;
+}
+
+function mapSheetTimeLogs(
+  rawLogs: Partial<TimeLog>[],
+  usersList: User[],
+  fallbackUser?: User
+): TimeLog[] {
+  let deletedIds = new Set<string>();
+  let deletedSigs = new Set<string>();
+  try {
+    deletedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]'));
+    deletedSigs = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_signatures') || '[]'));
+  } catch {}
+
+  const mappedLogs: TimeLog[] = [];
+  for (const l of rawLogs) {
+    const lEmpUpper = String(l.employeeCode || '').trim().toUpperCase();
+    const lEmpDigits = lEmpUpper.replace(/\D/g, '');
+    const lUidLower = String(l.userId || '').trim().toLowerCase();
+    const lNameLower = String(l.userName || '').trim().toLowerCase();
+
+    const matchedUser = usersList.find((u) => {
+      const uEmpUpper = String(u.employeeCode || '').trim().toUpperCase();
+      const uEmpDigits = uEmpUpper.replace(/\D/g, '');
+      const uIdLower = String(u.id || '').trim().toLowerCase();
+      const uUserLower = String(u.username || '').trim().toLowerCase();
+      const uNameLower = String(u.name || '').trim().toLowerCase();
+
+      if (uEmpUpper && lEmpUpper && uEmpUpper === lEmpUpper) return true;
+      if (uEmpDigits && lEmpDigits && Number(uEmpDigits) === Number(lEmpDigits)) return true;
+      if (uIdLower && lUidLower && uIdLower === lUidLower) return true;
+      if (uUserLower && (lUidLower === uUserLower || lEmpUpper.toLowerCase() === uUserLower)) return true;
+      if (uNameLower && lNameLower && uNameLower === lNameLower) return true;
+      return false;
+    });
+
+    const empCode = l.employeeCode || matchedUser?.employeeCode || fallbackUser?.employeeCode || l.userId || '';
+    const logDate = normalizeWorkDate(l.date, l.startTime) || getManilaDateString();
+    const logTask = (l.task || 'Work') as TaskCategory;
+    const rawDuration = Number(l.durationSeconds || 0);
+    const parsedDur = rawDuration > 0 ? rawDuration : parseDurationSeconds((l as any).durationFormatted || (l as any).totalTime || 0);
+
+    const rawCandidate = {
+      ...l,
+      employeeCode: empCode,
+      date: logDate,
+      task: logTask,
+      durationSeconds: parsedDur,
+    };
+
+    const detId = getDeterministicLogId(rawCandidate);
+    const sig = `${String(empCode).trim().toLowerCase()}|${String(logDate).trim()}|${String(logTask).trim().toLowerCase()}|${Math.round(parsedDur / 10)}`;
+
+    if (
+      deletedIds.has(detId.toLowerCase()) ||
+      (l.id && deletedIds.has(String(l.id).toLowerCase())) ||
+      (l.sessionId && deletedIds.has(String(l.sessionId).toLowerCase())) ||
+      deletedSigs.has(sig)
+    ) {
+      continue;
+    }
+
+    const item: TimeLog = {
+      id: detId,
+      sessionId: l.sessionId || detId,
+      userId: l.userId || matchedUser?.id || fallbackUser?.id || empCode,
+      employeeCode: empCode,
+      userName: l.userName || matchedUser?.name || fallbackUser?.name || empCode || 'Unknown Agent',
+      userAvatar: l.userAvatar || matchedUser?.avatar || '',
+      designation: (l.designation || matchedUser?.designation || fallbackUser?.designation || 'Outbound Agent') as Designation,
+      task: logTask,
+      date: logDate,
+      startTime: l.startTime || new Date().toISOString(),
+      endTime: l.endTime || 'In Progress',
+      durationSeconds: parsedDur,
+      status: l.status || 'completed',
+      geoTimezone: 'Asia/Manila',
+      geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
+      geoLocalEndTime: l.endTime || '',
+      mouseActivityAvg: (l as any).mousePercentage ?? l.mouseActivityAvg ?? 95,
+      keyboardActivityAvg: (l as any).keyboardPercentage ?? l.keyboardActivityAvg ?? 90,
+      idleSeconds: l.idleSeconds ?? ((Number((l as any).idleMinutes) || 0) * 60),
+      notes: l.notes || '',
+      appsUsed: Array.isArray(l.appsUsed) ? l.appsUsed : [],
+    };
+
+    mappedLogs.push(item);
+  }
+  return mappedLogs;
+}
+
+function mergeTimeLogsWithLocal(prevLogs: TimeLog[], incomingLogs: TimeLog[]): TimeLog[] {
+  const map = new Map<string, TimeLog>();
+  let editedIds = new Set<string>();
+  try {
+    editedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_edited_ids') || '[]'));
+  } catch {}
+
+  for (const item of prevLogs) {
+    map.set(item.id, item);
+  }
+  for (const item of incomingLogs) {
+    const local = map.get(item.id);
+    if (!local) {
+      map.set(item.id, item);
+    } else if (local.status !== 'running') {
+      const isEditedLocally = editedIds.has(item.id.toLowerCase()) || editedIds.has(local.id.toLowerCase());
+      if (isEditedLocally || (local.durationSeconds || 0) > (item.durationSeconds || 0)) {
+        map.set(item.id, {
+          ...item,
+          ...local,
+          durationSeconds: Math.max(local.durationSeconds || 0, item.durationSeconds || 0),
+          endTime: (local.durationSeconds || 0) > (item.durationSeconds || 0) ? local.endTime : item.endTime,
+        });
+      } else {
+        map.set(item.id, { ...local, ...item });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
 let isQuotaExhaustedGlobal = true;
 try {
   disableNetwork(db).catch(() => {});
@@ -339,73 +486,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return result;
   };
 
-  useEffect(() => {
-    const loadAuthoritativeRoster = async () => {
-      try {
-        const res = await fetchEmployeesFromGoogleSheets();
-        if (res.success && res.employees && res.employees.length > 0) {
-          const existingMap = new Map(users.map((u) => [u.id || u.employeeCode, u]));
-          const mergedEmployees = res.employees.map((emp) => {
-            const existing = existingMap.get(emp.id) || existingMap.get(emp.employeeCode);
-            if (existing) {
-              return {
-                ...existing,
-                ...emp,
-                idleTrackingEnabled: existing.idleTrackingEnabled ?? emp.idleTrackingEnabled ?? false,
-              };
-            }
-            return emp;
-          });
-          const merged = deduplicateUsers(ensureUsernames([...mergedEmployees, ...users]));
-          setUsers(merged);
-          localStorage.setItem('trackpulse_users', JSON.stringify(merged));
-        }
-      } catch (err) {
-        console.warn('Failed to load authoritative Google Sheets roster:', err);
+  const mergeFetchedEmployees = useCallback((prevUsers: User[], fetchedEmployees: User[]): User[] => {
+    const existingMap = new Map<string, User>();
+    for (const u of prevUsers) {
+      if (u.id) existingMap.set(u.id, u);
+      if (u.employeeCode) existingMap.set(String(u.employeeCode).trim().toLowerCase(), u);
+    }
+    const mergedEmployees = fetchedEmployees.map((emp) => {
+      const existing =
+        existingMap.get(emp.id) ||
+        (emp.employeeCode ? existingMap.get(String(emp.employeeCode).trim().toLowerCase()) : undefined);
+      if (existing) {
+        return {
+          ...existing,
+          ...emp,
+          idleTrackingEnabled: existing.idleTrackingEnabled ?? emp.idleTrackingEnabled ?? false,
+        };
       }
-
-      try {
-        const lRes = await fetch('/api/leave-requests');
-        if (lRes.ok) {
-          const lData = await lRes.json();
-          if (lData && Array.isArray(lData.leaveRequests) && lData.leaveRequests.length > 0) {
-            setLeaveRequests((prev) => {
-              const map = new Map<string, LeaveRequest>(prev.map((l) => [l.id, l]));
-              for (const item of lData.leaveRequests) {
-                map.set(item.id, item);
-              }
-              const merged = Array.from(map.values());
-              localStorage.setItem('trackpulse_leaverequests', JSON.stringify(merged));
-              return merged;
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to load server leave requests:', err);
-      }
-
-      try {
-        const bRes = await fetch('/api/leave-balances');
-        if (bRes.ok) {
-          const bData = await bRes.json();
-          if (bData && Array.isArray(bData.leaveBalances) && bData.leaveBalances.length > 0) {
-            setLeaveBalances((prev) => {
-              const map = new Map<string, LeaveBalance>(prev.map((b) => [b.id || b.employeeCode || b.userId, b]));
-              for (const item of bData.leaveBalances) {
-                const key = item.id || item.employeeCode || item.userId;
-                if (key) map.set(key, item);
-              }
-              const merged = Array.from(map.values());
-              localStorage.setItem('trackpulse_leavebalances', JSON.stringify(merged));
-              return merged;
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to load server leave balances:', err);
-      }
-    };
-    loadAuthoritativeRoster();
+      return emp;
+    });
+    return deduplicateUsers(ensureUsernames([...mergedEmployees, ...prevUsers]));
   }, []);
 
   const [users, setUsers] = useState<User[]>(() => {
@@ -1329,26 +1429,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const todayTotalSeconds = getTodayTrackedSeconds();
 
   const login = (user: User, mode: 'webapp' | 'software' = 'webapp', token?: string) => {
-    setCurrentUser(user);
-    setCurrentDesignation(user.designation || 'Outbound Agent');
+    const normalizedUser = normalizeSuperAdmin(user);
+    setCurrentUser(normalizedUser);
+    setCurrentDesignation(normalizedUser.designation || 'Outbound Agent');
     setIsAuthenticated(true);
     setLoginMode(mode);
     setIsDesktopDockView(mode === 'software');
     localStorage.setItem('trackpulse_auth', 'true');
-    localStorage.setItem('trackpulse_current_user', JSON.stringify(user));
+    localStorage.setItem('trackpulse_current_user', JSON.stringify(normalizedUser));
     if (token) localStorage.setItem('trackpulse_token', token);
 
-    // Admin sees all team logs; regular employee sees their own logs
-    const isAdminUser = user.role === 'admin' || user.role === 'va_admin' || Boolean((user as any).isSuperAdmin);
-    const filterOpts = isAdminUser ? undefined : { userId: user.employeeCode || user.id };
+    // Ensure full employee roster is up to date in state right after login
+    importEmployeesFromGoogleSheets().catch(() => {});
 
-    // Fetch logs from server API
-    fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts).then((res) => {
-      if (res.success && Array.isArray(res.timeLogs)) {
-        const mapped = res.timeLogs.map((l) => ({ ...l, status: l.status || 'completed' })) as TimeLog[];
+    // Supervisors/Admins/Leads/Trainers/HR/Payroll/QA need team logs; regular agents load their own logs (with formatting fallback)
+    const canViewAllTeamLogs = isSupervisorOrAdminRole(normalizedUser);
+    const filterOpts = canViewAllTeamLogs ? undefined : { userId: normalizedUser.employeeCode || normalizedUser.id };
+
+    fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts).then(async (res) => {
+      let rawLogs = res.success && Array.isArray(res.timeLogs) ? res.timeLogs : null;
+
+      // If an agent's sheet logs use slightly different ID/code formatting (e.g. "0023" vs "LLC-0023"),
+      // retry once without the server userId filter and match client-side by code/digits/id/name.
+      if (!canViewAllTeamLogs && res.success && Array.isArray(rawLogs) && rawLogs.length === 0) {
+        const unfilteredRes = await fetchTimeLogsFromGoogleSheets().catch(() => null);
+        if (unfilteredRes && unfilteredRes.success && Array.isArray(unfilteredRes.timeLogs)) {
+          rawLogs = unfilteredRes.timeLogs.filter((l) => matchesAgentRecord(l, normalizedUser));
+        }
+      }
+
+      if (res.success && Array.isArray(rawLogs)) {
+        const mapped = mapSheetTimeLogs(rawLogs, usersRef.current, normalizedUser);
         let finalLogs = mapped;
         try {
-          const empCode = String(user.employeeCode || user.id || '').trim();
+          const empCode = String(normalizedUser.employeeCode || normalizedUser.id || '').trim();
           if (empCode) {
             const backupKey = `llc_daily_time_backup_${empCode}`;
             const rawBackup = localStorage.getItem(backupKey);
@@ -1385,18 +1499,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.warn('Local time backup check notice:', e);
         }
 
-        setTimeLogs(finalLogs);
-        localStorage.setItem('trackpulse_timelogs', JSON.stringify(finalLogs));
+        setTimeLogs((prev) => {
+          const merged = mergeTimeLogsWithLocal(
+            canViewAllTeamLogs ? prev : prev.filter((l) => matchesAgentRecord(l, normalizedUser) || l.status === 'running'),
+            finalLogs
+          );
+          localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
+          return merged;
+        });
       }
     });
 
     syncAgentHeartbeatToSheets(googleSheetsWebhookUrl, {
-      userId: user.id,
-      employeeCode: user.employeeCode,
-      userName: user.name,
-      role: user.role,
-      designation: user.designation || 'Agent',
-      department: user.department || 'Operations',
+      userId: normalizedUser.id,
+      employeeCode: normalizedUser.employeeCode,
+      userName: normalizedUser.name,
+      role: normalizedUser.role,
+      designation: normalizedUser.designation || 'Agent',
+      department: normalizedUser.department || 'Operations',
       isOnline: true,
       status: 'online',
       isTracking: false,
@@ -1483,142 +1603,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const importEmployeesFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
+  const importEmployeesFromGoogleSheets = useCallback(async (): Promise<{ success: boolean; count: number; message: string }> => {
     try {
       const res = await fetchEmployeesFromGoogleSheets();
       if (res.success && res.employees && res.employees.length > 0) {
-        const existingMap = new Map(users.map((u) => [u.id || u.employeeCode, u]));
-        const mergedEmployees = res.employees.map((emp) => {
-          const existing = existingMap.get(emp.id) || existingMap.get(emp.employeeCode);
-          if (existing) {
-            return {
-              ...existing,
-              ...emp,
-              idleTrackingEnabled: existing.idleTrackingEnabled ?? emp.idleTrackingEnabled ?? false,
-            };
-          }
-          return emp;
-        });
-        const merged = deduplicateUsers(ensureUsernames([...mergedEmployees, ...users]));
-        setUsers(merged);
-        localStorage.setItem('trackpulse_users', JSON.stringify(merged));
-        return { success: true, count: merged.length, message: res.message };
-      }
-      return { success: false, count: users.length, message: 'Could not fetch remote employee roster.' };
-    } catch (err: any) {
-      return { success: false, count: users.length, message: err?.message || 'Error fetching roster.' };
-    }
-  };
-
-  const importTimeLogsFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
-    try {
-      const isAdminUser = currentUser.role === 'admin' || currentUser.role === 'va_admin' || Boolean((currentUser as any).isSuperAdmin);
-      const filterOpts = isAdminUser ? undefined : { userId: currentUser.employeeCode || currentUser.id };
-      const res = await fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts);
-      if (res.success && Array.isArray(res.timeLogs) && res.timeLogs.length > 0) {
-        const deletedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]'));
-        const deletedSigs = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_signatures') || '[]'));
-
-        const mappedLogs: TimeLog[] = [];
-        for (const l of res.timeLogs) {
-          const matchedUser = users.find(
-            (u) =>
-              (u.employeeCode && l.employeeCode && String(u.employeeCode).toLowerCase() === String(l.employeeCode).toLowerCase()) ||
-              u.id === l.userId ||
-              (u.name && l.userName && u.name.toLowerCase().trim() === String(l.userName).toLowerCase().trim())
-          );
-          const empCode = l.employeeCode || matchedUser?.employeeCode || currentUser.employeeCode;
-          const logDate = l.date || getManilaDateString();
-          const logTask = l.task || 'Work';
-          const logDur = Number(l.durationSeconds || 0);
-
-          const rawCandidate = {
-            ...l,
-            employeeCode: empCode,
-            date: logDate,
-            task: logTask,
-            durationSeconds: logDur,
-          };
-
-          const detId = getDeterministicLogId(rawCandidate);
-          const sig = `${String(empCode).trim().toLowerCase()}|${String(logDate).trim()}|${String(logTask).trim().toLowerCase()}|${Math.round(logDur / 10)}`;
-
-          if (
-            deletedIds.has(detId.toLowerCase()) ||
-            (l.id && deletedIds.has(String(l.id).toLowerCase())) ||
-            (l.sessionId && deletedIds.has(String(l.sessionId).toLowerCase())) ||
-            deletedSigs.has(sig)
-          ) {
-            continue;
-          }
-
-          const item: TimeLog = {
-            id: detId,
-            sessionId: l.sessionId || detId,
-            userId: l.userId || matchedUser?.id || currentUser.id,
-            employeeCode: empCode,
-            userName: l.userName || matchedUser?.name || currentUser.name,
-            userAvatar: l.userAvatar || matchedUser?.avatar || '',
-            designation: l.designation || matchedUser?.designation || currentUser.designation,
-            task: logTask,
-            date: logDate,
-            startTime: l.startTime || new Date().toISOString(),
-            endTime: l.endTime || 'In Progress',
-            durationSeconds: logDur,
-            status: l.status || 'completed',
-            geoTimezone: 'Asia/Manila',
-            geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
-            geoLocalEndTime: l.geoLocalEndTime || l.endTime || '',
-            mouseActivityAvg: (l as any).mousePercentage ?? l.mouseActivityAvg ?? 95,
-            keyboardActivityAvg: (l as any).keyboardPercentage ?? l.keyboardActivityAvg ?? 90,
-            idleSeconds: ((l as any).idleMinutes || 0) * 60,
-            notes: l.notes || '',
-            appsUsed: [],
-          };
-
-          mappedLogs.push(item);
-        }
-
-        setTimeLogs((prev) => {
-          const map = new Map<string, TimeLog>();
-          const editedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_edited_ids') || '[]'));
-          for (const item of prev) {
-            map.set(item.id, item);
-          }
-          for (const item of mappedLogs) {
-            const local = map.get(item.id);
-            if (!local) {
-              map.set(item.id, item);
-            } else if (local.status !== 'running') {
-              const isEditedLocally = editedIds.has(item.id.toLowerCase()) || editedIds.has(local.id.toLowerCase());
-              if (isEditedLocally || (local.durationSeconds || 0) > (item.durationSeconds || 0)) {
-                // Preserve local Admin edit over older spreadsheet row
-                map.set(item.id, {
-                  ...item,
-                  ...local,
-                  durationSeconds: Math.max(local.durationSeconds || 0, item.durationSeconds || 0),
-                  endTime: (local.durationSeconds || 0) > (item.durationSeconds || 0) ? local.endTime : item.endTime,
-                });
-              } else {
-                map.set(item.id, { ...local, ...item });
-              }
-            }
-          }
-          const merged = Array.from(map.values());
-          localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
+        let mergedCount = res.employees.length;
+        setUsers((prevUsers) => {
+          const merged = mergeFetchedEmployees(prevUsers, res.employees);
+          mergedCount = merged.length;
+          localStorage.setItem('trackpulse_users', JSON.stringify(merged));
           return merged;
         });
+        return { success: true, count: mergedCount, message: res.message };
+      }
+      return { success: false, count: usersRef.current.length, message: res.message || 'Could not fetch remote employee roster.' };
+    } catch (err: any) {
+      return { success: false, count: usersRef.current.length, message: err?.message || 'Error fetching roster.' };
+    }
+  }, [mergeFetchedEmployees]);
+
+  const importTimeLogsFromGoogleSheets = useCallback(async (): Promise<{ success: boolean; count: number; message: string }> => {
+    try {
+      const activeUser = currentUserRef.current;
+      const canViewAllTeamLogs = isSupervisorOrAdminRole(activeUser);
+      const filterOpts = canViewAllTeamLogs ? undefined : { userId: activeUser.employeeCode || activeUser.id };
+      const res = await fetchTimeLogsFromGoogleSheets(undefined, undefined, filterOpts);
+      let rawLogs = res.success && Array.isArray(res.timeLogs) ? res.timeLogs : null;
+
+      if (!canViewAllTeamLogs && res.success && Array.isArray(rawLogs) && rawLogs.length === 0) {
+        const unfilteredRes = await fetchTimeLogsFromGoogleSheets().catch(() => null);
+        if (unfilteredRes && unfilteredRes.success && Array.isArray(unfilteredRes.timeLogs)) {
+          rawLogs = unfilteredRes.timeLogs.filter((l) => matchesAgentRecord(l, activeUser));
+        }
+      }
+
+      if (res.success && Array.isArray(rawLogs)) {
+        const mappedLogs = mapSheetTimeLogs(rawLogs, usersRef.current, activeUser);
+        if (mappedLogs.length > 0) {
+          setTimeLogs((prev) => {
+            const merged = mergeTimeLogsWithLocal(prev, mappedLogs);
+            localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
+            return merged;
+          });
+        }
         return { success: true, count: mappedLogs.length, message: res.message };
       }
+      return { success: false, count: timeLogsRef.current.length, message: res.message || 'Could not fetch remote time logs.' };
     } catch (err: any) {
       console.warn('Error fetching time logs from Google Sheets:', err);
+      return { success: false, count: timeLogsRef.current.length, message: err?.message || 'Error fetching time logs.' };
     }
-    return { success: true, count: timeLogs.length, message: `Loaded ${timeLogs.length} local logs.` };
-  };
+  }, []);
 
-  const importPresenceFromGoogleSheets = async (): Promise<{ success: boolean; count: number; message: string }> => {
+  const importPresenceFromGoogleSheets = useCallback(async (): Promise<{ success: boolean; count: number; message: string }> => {
     try {
-      const res = await fetchLivePresenceFromGoogleSheets(googleSheetsWebhookUrl, DEFAULT_SPREADSHEET_ID, users);
+      const res = await fetchLivePresenceFromGoogleSheets(googleSheetsWebhookUrlRef.current, DEFAULT_SPREADSHEET_ID, usersRef.current);
       if (res.success && Array.isArray(res.presenceList)) {
         setUserPresenceList(res.presenceList);
         return { success: true, count: res.presenceList.length, message: res.message };
@@ -1626,8 +1665,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err: any) {
       console.warn('Error fetching live presence from Google Sheets:', err);
     }
-    return { success: true, count: userPresenceList.length, message: 'Presence updated.' };
-  };
+    return { success: true, count: userPresenceListRef.current.length, message: 'Presence updated.' };
+  }, []);
 
   const syncAllFromGoogleSheets = async (): Promise<{ success: boolean; message: string }> => {
     return { success: true, message: 'Sync complete.' };
@@ -2484,6 +2523,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isPausedRef = useRef(isPaused);
   isPausedRef.current = isPaused;
 
+  const usersRef = useRef(users);
+  usersRef.current = users;
+
+  const timeLogsRef = useRef(timeLogs);
+  timeLogsRef.current = timeLogs;
+
+  const userPresenceListRef = useRef(userPresenceList);
+  userPresenceListRef.current = userPresenceList;
+
+  const googleSheetsWebhookUrlRef = useRef(googleSheetsWebhookUrl);
+  googleSheetsWebhookUrlRef.current = googleSheetsWebhookUrl;
+
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
 
@@ -2495,6 +2546,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const currentActiveAppRef = useRef(currentActiveApp);
   currentActiveAppRef.current = currentActiveApp;
+
+  // Initial Authoritative Data Bootstrap: load full roster and (if already logged in) fresh time logs
+  useEffect(() => {
+    const loadAuthoritativeData = async () => {
+      await importEmployeesFromGoogleSheets().catch((err) => {
+        console.warn('Failed to load authoritative Google Sheets roster:', err);
+      });
+
+      if (typeof window !== 'undefined' && localStorage.getItem('trackpulse_auth') === 'true') {
+        await importTimeLogsFromGoogleSheets().catch((err) => {
+          console.warn('Failed to load authoritative Google Sheets time logs:', err);
+        });
+      }
+
+      try {
+        const lRes = await fetch('/api/leave-requests');
+        if (lRes.ok && lRes.headers.get('content-type')?.includes('application/json')) {
+          const lData = await lRes.json();
+          if (lData && Array.isArray(lData.leaveRequests) && lData.leaveRequests.length > 0) {
+            setLeaveRequests((prev) => {
+              const map = new Map<string, LeaveRequest>(prev.map((l) => [l.id, l]));
+              for (const item of lData.leaveRequests) {
+                map.set(item.id, item);
+              }
+              const merged = Array.from(map.values());
+              localStorage.setItem('trackpulse_leaverequests', JSON.stringify(merged));
+              return merged;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load server leave requests:', err);
+      }
+
+      try {
+        const bRes = await fetch('/api/leave-balances');
+        if (bRes.ok && bRes.headers.get('content-type')?.includes('application/json')) {
+          const bData = await bRes.json();
+          if (bData && Array.isArray(bData.leaveBalances) && bData.leaveBalances.length > 0) {
+            setLeaveBalances((prev) => {
+              const map = new Map<string, LeaveBalance>(prev.map((b) => [b.id || b.employeeCode || b.userId, b]));
+              for (const item of bData.leaveBalances) {
+                const key = item.id || item.employeeCode || item.userId;
+                if (key) map.set(key, item);
+              }
+              const merged = Array.from(map.values());
+              localStorage.setItem('trackpulse_leavebalances', JSON.stringify(merged));
+              return merged;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load server leave balances:', err);
+      }
+    };
+    loadAuthoritativeData();
+  }, [importEmployeesFromGoogleSheets, importTimeLogsFromGoogleSheets]);
 
   // Dynamic Active-Window Detection: Tracks focused tracker vs background work software
   useEffect(() => {
@@ -2553,12 +2661,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentTask]);
 
-  // Live Presence Polling (every 2 minutes / 120,000 ms)
+  // Live Presence Polling (every 2 minutes / 120,000 ms) when authenticated
   useEffect(() => {
+    if (!isAuthenticated) return;
     let isMounted = true;
     const pollPresence = async () => {
       try {
-        const res = await fetchLivePresenceFromGoogleSheets(googleSheetsWebhookUrl, DEFAULT_SPREADSHEET_ID, users);
+        const res = await fetchLivePresenceFromGoogleSheets(
+          googleSheetsWebhookUrl,
+          DEFAULT_SPREADSHEET_ID,
+          usersRef.current
+        );
         if (isMounted && res.success && Array.isArray(res.presenceList)) {
           setUserPresenceList(res.presenceList);
         }
@@ -2572,7 +2685,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isMounted = false;
       clearInterval(interval);
     };
-  }, [googleSheetsWebhookUrl, users]);
+  }, [googleSheetsWebhookUrl, isAuthenticated]);
 
   // Wall-clock timestamp-based desktop timer and unthrottled background heartbeat + 5-minute sync
   useEffect(() => {

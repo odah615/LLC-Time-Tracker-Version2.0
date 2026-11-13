@@ -16,8 +16,8 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
       );
     }
 
-    const scriptUrl = context.env.LLCTIMETRACKERV2_APPS_SCRIPT_URL || context.env.APPS_SCRIPT_URL;
-    const secret = context.env.LLCTRACKERV2_SHARED_SECRET;
+    const scriptUrl = (context.env.LLCTIMETRACKERV2_APPS_SCRIPT_URL || context.env.APPS_SCRIPT_URL || '').trim();
+    const secret = (context.env.LLCTRACKERV2_SHARED_SECRET || '').trim();
 
     if (!scriptUrl || !secret) {
       return new Response(
@@ -35,18 +35,31 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
       newPassword,
     };
 
-    const upstreamRes = await fetch(scriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-    const respText = await upstreamRes.text();
+    let upstreamRes: Response;
+    let respText = '';
+    try {
+      upstreamRes = await fetch(scriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      respText = await upstreamRes.text();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
     let data: any = {};
     try {
       data = JSON.parse(respText);
     } catch {
-      data = { status: 'ERROR', message: respText };
+      return new Response(
+        JSON.stringify({ success: false, error: 'Google Apps Script returned an invalid response while saving password.' }),
+        { status: 502, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     if (data.status === 'SUCCESS' || data.verified === true) {
@@ -68,9 +81,15 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
       );
     }
   } catch (err: any) {
+    const isAbort = err?.name === 'AbortError';
     return new Response(
-      JSON.stringify({ success: false, error: `Password update proxy error: ${err?.message || err}` }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+      JSON.stringify({
+        success: false,
+        error: isAbort
+          ? 'Password update timed out waiting for Google Sheets. Please try again.'
+          : `Password update proxy error: ${err?.message || err}`,
+      }),
+      { status: isAbort ? 504 : 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
 }

@@ -2797,19 +2797,29 @@ export const fetchEmployeesFromGoogleSheets = async (
   existingUsers: User[] = []
 ): Promise<{ success: boolean; employees: User[]; count: number; message: string }> => {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     const proxyRes = await fetch('/api/users', {
       headers: getAuthHeaders(),
-    });
-    if (proxyRes.ok) {
-      const data = await proxyRes.json();
-      if (Array.isArray(data) && data.length > 0) {
-        return {
-          success: true,
-          employees: deduplicateUsers(data),
-          count: data.length,
-          message: `Successfully loaded ${data.length} employee accounts from Google Sheets!`,
-        };
-      }
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId));
+
+    const data: any = await proxyRes.json().catch(() => null);
+    if (proxyRes.ok && Array.isArray(data) && data.length > 0) {
+      return {
+        success: true,
+        employees: deduplicateUsers(data),
+        count: data.length,
+        message: `Successfully loaded ${data.length} employee accounts from Google Sheets!`,
+      };
+    }
+    if (!proxyRes.ok && data?.error) {
+      return {
+        success: false,
+        employees: [],
+        count: 0,
+        message: data.error,
+      };
     }
   } catch (e) {
     console.warn('[SHEETS SYNC] /api/users fetch warning:', e);
@@ -3106,18 +3116,28 @@ export const fetchTimeLogsFromGoogleSheets = async (
     if (options?.userId) params.set('userId', options.userId);
     if (options?.days) params.set('days', String(options.days));
     if (options?.since) params.set('since', options.since);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     const proxyRes = await fetch(`/api/timelogs?${params.toString()}`, {
       headers: getAuthHeaders(),
-    });
-    if (proxyRes.ok) {
-      const data: any = await proxyRes.json();
-      if (data && Array.isArray(data.timeLogs)) {
-        return {
-          success: true,
-          timeLogs: data.timeLogs,
-          message: `Successfully loaded ${data.timeLogs.length} time logs.`,
-        };
-      }
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId));
+
+    const data: any = await proxyRes.json().catch(() => null);
+    if (proxyRes.ok && data && data.success !== false && Array.isArray(data.timeLogs)) {
+      return {
+        success: true,
+        timeLogs: data.timeLogs,
+        message: `Successfully loaded ${data.timeLogs.length} time logs.`,
+      };
+    }
+    if (data && data.error) {
+      return {
+        success: false,
+        timeLogs: [],
+        message: data.error,
+      };
     }
   } catch (err: any) {
     console.warn('Failed to fetch time logs via /api/timelogs:', err?.message || err);

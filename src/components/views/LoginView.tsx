@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { User } from '../../types';
+import { verifyLocalPassword } from '../../lib/userUtils';
 import { maskPassword } from '../../lib/googleSheetsSync';
 import { downloadWordDocInstructions } from '../../lib/docGenerator';
 import { downloadDesktopSoftwarePackage } from '../../lib/desktopDownloader';
@@ -65,7 +66,7 @@ export const LoginView: React.FC = () => {
   const [firstTimeError, setFirstTimeError] = useState<string>('');
   const [isSavingPassword, setIsSavingPassword] = useState<boolean>(false);
 
-  const tryClientRosterLogin = (cleanQuery: string, pwdInput: string): { success: boolean; user?: User; error?: string } => {
+  const tryClientRosterLogin = async (cleanQuery: string, pwdInput: string): Promise<{ success: boolean; user?: User; error?: string }> => {
     const q = cleanQuery.toLowerCase();
     const cleanDigits = q.replace(/\D/g, '');
 
@@ -78,7 +79,7 @@ export const LoginView: React.FC = () => {
       const uDigits = uCode.replace(/\D/g, '');
 
       if (uUser === q || uCode === q || uId === q || uEmail === q || uName === q) return true;
-      if (cleanDigits && uDigits && uDigits === cleanDigits) return true;
+      if (cleanDigits && uDigits && Number(uDigits) === Number(cleanDigits)) return true;
       return false;
     });
 
@@ -109,38 +110,31 @@ export const LoginView: React.FC = () => {
           return { success: true, user: adminUser };
         }
       }
-      return { success: false, error: `Account not found for "${cleanQuery}".` };
+      return { success: false, error: `Account not found locally for "${cleanQuery}" and authentication server is unreachable.` };
     }
 
     const isRootAdmin = matched.role === 'admin' || matched.employeeCode?.toLowerCase() === 'superadmin' || matched.id === 'usr-superadmin-red';
     const savedCustomPw = localStorage.getItem(`trackpulse_user_pw_${matched.id}`);
-    const cleanInputPw = pwdInput.trim().toLowerCase();
-    const isDefaultVariant =
-      cleanInputPw === 'password123!' ||
-      cleanInputPw === 'password123' ||
-      cleanInputPw === 'sandboxpassword' ||
-      cleanInputPw === 'sandboxpass' ||
-      cleanInputPw === 'password' ||
-      cleanInputPw === 'adminpassword123!' ||
-      cleanInputPw === 'adminpassw0rd123!' ||
-      cleanInputPw === 'superadmin2026';
+    const cleanInputPw = pwdInput.trim();
 
     let isPasswordValid = false;
-    if (savedCustomPw) {
-      isPasswordValid = pwdInput === savedCustomPw || cleanInputPw === savedCustomPw.toLowerCase();
+    if (savedCustomPw && cleanInputPw === savedCustomPw.trim()) {
+      isPasswordValid = true;
     }
-    if (!isPasswordValid && matched.password) {
-      isPasswordValid = pwdInput === matched.password || cleanInputPw === matched.password.toLowerCase();
+    if (!isPasswordValid && matched.password && matched.password.trim() !== '') {
+      isPasswordValid = cleanInputPw === matched.password.trim();
+    }
+    if (!isPasswordValid && matched.passwordHash) {
+      isPasswordValid = await verifyLocalPassword(cleanInputPw, matched.passwordHash);
     }
 
-    if (!isPasswordValid) {
-      if (
-        isDefaultVariant ||
-        (isRootAdmin && (cleanInputPw.includes('admin') || cleanInputPw.includes('superadmin'))) ||
-        pwdInput.trim().length >= 6
-      ) {
-        isPasswordValid = true;
-      }
+    // Allow initial default Password123! only if the user hasn't set a custom password yet
+    const hasChangedPw = matched.isPasswordChanged === 'YES' && matched.mustChangePassword === false;
+    if (!isPasswordValid && !hasChangedPw && cleanInputPw === 'Password123!') {
+      isPasswordValid = true;
+    }
+    if (!isPasswordValid && isRootAdmin && (cleanInputPw === 'AdminpassW0rd123!' || cleanInputPw === 'SUPERADMIN2026')) {
+      isPasswordValid = true;
     }
 
     if (!isPasswordValid) {
@@ -164,9 +158,12 @@ export const LoginView: React.FC = () => {
     }
 
     setIsLoggingIn(true);
+    let shouldTryOfflineFallback = false;
+    let serverErrorMsg = '';
+
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
@@ -187,6 +184,10 @@ export const LoginView: React.FC = () => {
         if (token) {
           localStorage.setItem('trackpulse_token', token);
         }
+        try {
+          localStorage.setItem(`trackpulse_user_pw_${matchedUser.id}`, password);
+        } catch {}
+
         if (data.mustChangePassword) {
           setPendingPasswordChangeUser(matchedUser);
           setPendingToken(token);
@@ -200,19 +201,45 @@ export const LoginView: React.FC = () => {
         login(matchedUser, resolvedMode, token);
         return;
       }
-    } catch (err) {
-      console.warn('[LoginView] Server authentication route unreachable or timed out. Falling back to client roster:', err);
+
+      // Authoritative rejection from server / Google Sheets (400, 401, 403): DO NOT bypass
+      if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
+        setErrorMsg(data?.error || 'Incorrect username/code or password.');
+        setIsLoggingIn(false);
+        return;
+      }
+
+      // Server configuration errors (e.g. secret mismatch / missing env vars): show directly
+      if (resp.status === 500 && data?.error && (data.error.includes('SHARED_SECRET') || data.error.includes('environment bindings'))) {
+        setErrorMsg(data.error);
+        setIsLoggingIn(false);
+        return;
+      }
+
+      // Gateway / timeout / busy responses (502, 503, 504, 524)
+      shouldTryOfflineFallback = true;
+      serverErrorMsg = data?.error || `Authentication server temporarily unavailable (HTTP ${resp.status}).`;
+    } catch (err: any) {
+      console.warn('[LoginView] Server authentication route unreachable or timed out:', err);
+      shouldTryOfflineFallback = true;
+      serverErrorMsg = err?.name === 'AbortError'
+        ? 'Authentication server timed out waiting for Google Sheets. Please try signing in again.'
+        : 'Unable to reach authentication server.';
     }
 
-    // Client Roster Fallback (Bypasses Cloudflare Worker & Sync latency)
-    const fallbackResult = tryClientRosterLogin(cleanCode, password);
-    if (fallbackResult.success && fallbackResult.user) {
-      const resolvedMode: 'webapp' | 'software' = isSoftwareEnv ? 'software' : 'webapp';
-      login(fallbackResult.user, resolvedMode, 'local_fallback_token');
+    if (shouldTryOfflineFallback) {
+      const fallbackResult = await tryClientRosterLogin(cleanCode, password);
+      if (fallbackResult.success && fallbackResult.user) {
+        const resolvedMode: 'webapp' | 'software' = isSoftwareEnv ? 'software' : 'webapp';
+        login(fallbackResult.user, resolvedMode, 'local_fallback_token');
+        return;
+      }
+      setErrorMsg(fallbackResult.error || serverErrorMsg || 'Unable to sign in right now. Please try again.');
+      setIsLoggingIn(false);
       return;
     }
 
-    setErrorMsg(fallbackResult.error || 'Login rejected: Incorrect password or user not found.');
+    setErrorMsg(serverErrorMsg || 'Login rejected: Incorrect password or user not found.');
     setIsLoggingIn(false);
   };
 
@@ -254,6 +281,8 @@ export const LoginView: React.FC = () => {
         headers,
         body: JSON.stringify({
           userId: pendingPasswordChangeUser.id,
+          employeeCode: pendingPasswordChangeUser.employeeCode,
+          username: pendingPasswordChangeUser.username,
           newPassword: trimmed,
           currentPassword: password,
         }),
@@ -261,11 +290,19 @@ export const LoginView: React.FC = () => {
       const data: any = await resp.json().catch(() => null);
 
       if (resp.ok && data && data.success) {
+        const updatedUser: User = {
+          ...(data.user || pendingPasswordChangeUser),
+          mustChangePassword: false,
+          isPasswordChanged: 'YES',
+        };
+        try {
+          localStorage.setItem(`trackpulse_user_pw_${updatedUser.id}`, trimmed);
+        } catch {}
         setIsSavingPassword(false);
         setPendingPasswordChangeUser(null);
         setPendingToken('');
         const resolvedMode: 'webapp' | 'software' = isSoftwareEnv ? 'software' : 'webapp';
-        login(pendingPasswordChangeUser, resolvedMode, activeToken);
+        login(updatedUser, resolvedMode, activeToken);
         return;
       }
       setFirstTimeError(data?.error || 'Password update could not be verified. Please try again.');

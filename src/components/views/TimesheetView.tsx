@@ -106,6 +106,9 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     setWebhookInputVal(googleSheetsWebhookUrl || '');
   }, [googleSheetsWebhookUrl]);
 
+  const importLogsRef = React.useRef(importTimeLogsFromGoogleSheets);
+  importLogsRef.current = importTimeLogsFromGoogleSheets;
+
   useEffect(() => {
     let isMounted = true;
     let isRefreshing = false;
@@ -113,9 +116,9 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       if (isRefreshing) return;
       isRefreshing = true;
       try {
-        await importTimeLogsFromGoogleSheets();
+        await importLogsRef.current();
       } catch (err) {
-        console.warn('[TimesheetView] Google Sheets 60s background refresh notice:', err);
+        console.warn('[TimesheetView] Google Sheets background refresh notice:', err);
       } finally {
         if (isMounted) {
           isRefreshing = false;
@@ -132,7 +135,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       isMounted = false;
       clearInterval(interval);
     };
-  }, [importTimeLogsFromGoogleSheets]);
+  }, []);
 
   const handleManualSheetsSync = async () => {
     setIsSyncingSheets(true);

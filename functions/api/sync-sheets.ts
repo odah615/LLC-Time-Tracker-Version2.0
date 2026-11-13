@@ -43,7 +43,7 @@ export async function onRequestPost(context: { request: Request; env: Env }) {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
 
         let upstreamRes: Response;
         let respText = '';
