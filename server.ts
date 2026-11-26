@@ -95,7 +95,9 @@ const DEFAULT_DESIGNATION_TASKS: Record<string, string[]> = {
     'Training',
     'Coaching',
     'Team Meeting',
-    'QA Review',
+    'Email Handling',
+    'Admin Task',
+    'Data Entry & Market Research',
     'On Shift',
   ],
   'Admin': [

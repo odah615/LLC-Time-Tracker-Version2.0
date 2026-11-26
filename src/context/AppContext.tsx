@@ -108,10 +108,22 @@ function matchesAgentRecord(log: Partial<TimeLog>, user: User): boolean {
   return false;
 }
 
+function isRunningOrUnclosedLog(log?: Partial<TimeLog> | null): boolean {
+  if (!log) return false;
+  const statusLower = String(log.status || '').trim().toLowerCase();
+  const endLower = String(log.endTime || '').trim().toLowerCase();
+  return (
+    statusLower === 'running' ||
+    statusLower === 'active' ||
+    endLower.includes('in progress') ||
+    endLower.includes('running')
+  );
+}
+
 function mapSheetTimeLogs(
   rawLogs: Partial<TimeLog>[],
   usersList: User[],
-  fallbackUser?: User
+  _fallbackUser?: User
 ): TimeLog[] {
   let deletedIds = new Set<string>();
   let deletedSigs = new Set<string>();
@@ -122,10 +134,27 @@ function mapSheetTimeLogs(
 
   const mappedLogs: TimeLog[] = [];
   for (const l of rawLogs) {
-    const lEmpUpper = String(l.employeeCode || '').trim().toUpperCase();
+    if (!l || typeof l !== 'object') continue;
+
+    const rawEmpCode = String(l.employeeCode || '').trim();
+    const rawUserId = String(l.userId || '').trim();
+    const rawUserName = String(l.userName || '').trim();
+    const rawId = String(l.id || l.sessionId || '').trim();
+    const rawTask = String(l.task || '').trim();
+    const rawStartTime = String(l.startTime || '').trim();
+    const rawEndTime = String(l.endTime || '').trim();
+    const rawDuration = Number(l.durationSeconds || 0);
+    const parsedDur = rawDuration > 0 ? rawDuration : parseDurationSeconds((l as any).durationFormatted || (l as any).totalTime || 0);
+
+    // Strictly skip blank / cleared rows from Google Sheets Time_Logs so they are NEVER
+    // hijacked and attributed to whichever user happens to be logged in
+    if (!rawEmpCode && !rawUserId && !rawUserName) continue;
+    if (!rawId && !rawTask && !rawStartTime && !(parsedDur > 0)) continue;
+
+    const lEmpUpper = rawEmpCode.toUpperCase();
     const lEmpDigits = lEmpUpper.replace(/\D/g, '');
-    const lUidLower = String(l.userId || '').trim().toLowerCase();
-    const lNameLower = String(l.userName || '').trim().toLowerCase();
+    const lUidLower = rawUserId.toLowerCase();
+    const lNameLower = rawUserName.toLowerCase();
 
     const matchedUser = usersList.find((u) => {
       const uEmpUpper = String(u.employeeCode || '').trim().toUpperCase();
@@ -142,11 +171,11 @@ function mapSheetTimeLogs(
       return false;
     });
 
-    const empCode = l.employeeCode || matchedUser?.employeeCode || fallbackUser?.employeeCode || l.userId || '';
-    const logDate = normalizeWorkDate(l.date, l.startTime) || getManilaDateString();
-    const logTask = (l.task || 'Work') as TaskCategory;
-    const rawDuration = Number(l.durationSeconds || 0);
-    const parsedDur = rawDuration > 0 ? rawDuration : parseDurationSeconds((l as any).durationFormatted || (l as any).totalTime || 0);
+    const empCode = rawEmpCode || matchedUser?.employeeCode || rawUserId;
+    if (!empCode && !matchedUser) continue;
+
+    const logDate = normalizeWorkDate(l.date, rawStartTime) || getManilaDateString();
+    const logTask = (rawTask || 'Work') as TaskCategory;
 
     const rawCandidate = {
       ...l,
@@ -168,23 +197,27 @@ function mapSheetTimeLogs(
       continue;
     }
 
+    const normalizedStatus = (String(l.status || '').trim().toLowerCase() === 'running' ? 'running' : 'completed') as TimeLog['status'];
+    const endIsRunning = rawEndTime.toLowerCase().includes('running') || rawEndTime.toLowerCase().includes('in progress');
+    const resolvedStatus: TimeLog['status'] = endIsRunning ? 'running' : normalizedStatus;
+
     const item: TimeLog = {
       id: detId,
       sessionId: l.sessionId || detId,
-      userId: l.userId || matchedUser?.id || fallbackUser?.id || empCode,
+      userId: rawUserId || matchedUser?.id || empCode,
       employeeCode: empCode,
-      userName: l.userName || matchedUser?.name || fallbackUser?.name || empCode || 'Unknown Agent',
+      userName: rawUserName || matchedUser?.name || empCode || 'Unknown Agent',
       userAvatar: l.userAvatar || matchedUser?.avatar || '',
-      designation: (l.designation || matchedUser?.designation || fallbackUser?.designation || 'Outbound Agent') as Designation,
+      designation: (l.designation || matchedUser?.designation || 'Outbound Agent') as Designation,
       task: logTask,
       date: logDate,
-      startTime: l.startTime || new Date().toISOString(),
-      endTime: l.endTime || 'In Progress',
+      startTime: rawStartTime,
+      endTime: rawEndTime || (resolvedStatus === 'running' ? 'In Progress' : ''),
       durationSeconds: parsedDur,
-      status: l.status || 'completed',
+      status: resolvedStatus,
       geoTimezone: 'Asia/Manila',
-      geoLocalStartTime: l.geoLocalStartTime || l.startTime || '',
-      geoLocalEndTime: l.endTime || '',
+      geoLocalStartTime: l.geoLocalStartTime || rawStartTime,
+      geoLocalEndTime: rawEndTime,
       mouseActivityAvg: (l as any).mousePercentage ?? l.mouseActivityAvg ?? 95,
       keyboardActivityAvg: (l as any).keyboardPercentage ?? l.keyboardActivityAvg ?? 90,
       idleSeconds: l.idleSeconds ?? ((Number((l as any).idleMinutes) || 0) * 60),
@@ -679,6 +712,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loadActiveSession = useCallback((code?: string) => {
     if (typeof window === 'undefined') return null;
+    // Only restore an active timer inside the Desktop Tracker app window — opening the Web Portal
+    // in a browser tab must NEVER silently hijack or run a parallel timer from localStorage.
+    if (!isSoftwareEnvDetected) {
+      return null;
+    }
     // Never restore an active tracking session if the user is not currently authenticated
     if (localStorage.getItem('trackpulse_auth') !== 'true') {
       return null;
@@ -725,8 +763,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (currentUser?.designation) {
       setCurrentDesignation(currentUser.designation);
+      if (!isTracking) {
+        const raw = currentUser.designation;
+        const norm = normalizeDesignation(raw);
+        const allowed = designationTasks[raw] || designationTasks[norm];
+        if (Array.isArray(allowed) && allowed.length > 0) {
+          setCurrentTask((prev) => (allowed.includes(prev) ? prev : allowed[0]));
+        }
+      }
     }
-  }, [currentUser?.id, currentUser?.designation]);
+  }, [currentUser?.id, currentUser?.designation, designationTasks, isTracking]);
 
   const taskStartTimeRef = useRef<number>(initialActiveSession?.taskStartTime || 0);
   const accumulatedPausedMsRef = useRef<number>(initialActiveSession?.accumulatedPausedMs || 0);
@@ -1478,13 +1524,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getTodayTrackedSeconds = useCallback((): number => {
     const today = getManilaDateString();
+    const activeSegId = isTracking ? activeSegmentIdRef.current : '';
+    const seenIds = new Set<string>();
 
     const completedTodaySec = timeLogs
       .filter((l) => {
         if (!matchesAgentRecord(l, currentUser)) return false;
-        if (l.status !== 'completed') return false;
+        if (isRunningOrUnclosedLog(l)) return false;
+        if (activeSegId && (l.id === activeSegId || l.sessionId === activeSegId)) return false;
         const logDate = normalizeWorkDate(l.date, l.startTime) || today;
-        return logDate === today;
+        if (logDate !== today) return false;
+        const dedupeKey = String(l.id || l.sessionId || '');
+        if (dedupeKey && seenIds.has(dedupeKey)) return false;
+        if (dedupeKey) seenIds.add(dedupeKey);
+        return true;
       })
       .reduce((sum, l) => sum + Math.max(0, Number(l.durationSeconds) || 0), 0);
 
@@ -1498,13 +1551,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const normalizedUser = normalizeSuperAdmin(user);
 
     // Always begin a fresh login in clean Standby state — never inherit or auto-start a stale timer
-    clearAllActiveSessionStorage(normalizedUser.employeeCode || normalizedUser.id);
+    // Only clear active-session storage when signing into Desktop Tracker mode so opening the Web Portal
+    // doesn't wipe an already-running Desktop Tracker window's session key.
+    if (mode === 'software') {
+      clearAllActiveSessionStorage(normalizedUser.employeeCode || normalizedUser.id);
+    }
     clearLegacyDailyTotalRatchets();
     setIsTracking(false);
     setIsPaused(false);
     setElapsedSeconds(0);
     setSessionIdleDeductionSeconds(0);
     setIsIdleAlertActive(false);
+    setTimeLogs([]);
     taskStartTimeRef.current = 0;
     accumulatedPausedMsRef.current = 0;
     pauseStartTimeRef.current = null;
@@ -1545,6 +1603,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let finalLogs = mapped;
         try {
           const empCode = String(normalizedUser.employeeCode || normalizedUser.id || '').trim();
+          const todayManila = getManilaDateString();
           if (empCode) {
             const backupKey = `llc_daily_time_backup_${empCode}`;
             const rawBackup = localStorage.getItem(backupKey);
@@ -1552,16 +1611,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const backupLogs: TimeLog[] = JSON.parse(rawBackup);
               if (Array.isArray(backupLogs)) {
                 const serverLogIds = new Set(mapped.map((l) => l.id));
+                const makeSig = (l: any) =>
+                  `${String(l.employeeCode || l.userId || '').trim().toLowerCase()}|${String(normalizeWorkDate(l.date, l.startTime) || '').trim()}|${String(l.task || '').trim().toLowerCase()}|${Math.round(Number(l.durationSeconds || 0) / 10)}`;
+                const serverSigs = new Set(mapped.map(makeSig));
                 const deletedIds = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_ids') || '[]'));
                 const deletedSigs = new Set<string>(JSON.parse(localStorage.getItem('trackpulse_deleted_signatures') || '[]'));
-                const makeSig = (l: any) =>
-                  `${String(l.employeeCode || l.userId || '').trim().toLowerCase()}|${String(l.date || '').trim()}|${String(l.task || '').trim().toLowerCase()}|${Math.round(Number(l.durationSeconds || 0) / 10)}`;
 
                 const missingLogs = backupLogs.filter((l) => {
+                  if (isRunningOrUnclosedLog(l)) return false;
                   if (l.status !== 'completed') return false;
+                  if ((Number(l.durationSeconds) || 0) <= 5) return false;
+                  if (normalizeWorkDate(l.date, l.startTime) !== todayManila) return false;
                   if (serverLogIds.has(l.id)) return false;
+                  const sig = makeSig(l);
+                  if (serverSigs.has(sig)) return false;
                   if (deletedIds.has(String(l.id).toLowerCase())) return false;
-                  if (deletedSigs.has(makeSig(l))) return false;
+                  if (deletedSigs.has(sig)) return false;
                   return true;
                 });
 
@@ -1581,13 +1646,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.warn('Local time backup check notice:', e);
         }
 
-        setTimeLogs((prev) => {
-          const merged = mergeTimeLogsWithLocal(
-            canViewAllTeamLogs ? prev : prev.filter((l) => matchesAgentRecord(l, normalizedUser) || l.status === 'running'),
-            finalLogs
-          );
-          localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
-          return merged;
+        setTimeLogs(() => {
+          localStorage.setItem('trackpulse_timelogs', JSON.stringify(finalLogs));
+          return finalLogs;
         });
       }
     });
@@ -1730,13 +1791,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (res.success && Array.isArray(rawLogs)) {
         const mappedLogs = mapSheetTimeLogs(rawLogs, usersRef.current, activeUser);
-        if (mappedLogs.length > 0) {
-          setTimeLogs((prev) => {
-            const merged = mergeTimeLogsWithLocal(prev, mappedLogs);
-            localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
-            return merged;
-          });
-        }
+        setTimeLogs((prev) => {
+          const activeSegId = isTrackingRef.current ? activeSegmentIdRef.current : '';
+          const activeLocal = activeSegId ? prev.filter((l) => l.id === activeSegId) : [];
+          const merged = mergeTimeLogsWithLocal(activeLocal, mappedLogs);
+          localStorage.setItem('trackpulse_timelogs', JSON.stringify(merged));
+          return merged;
+        });
         return { success: true, count: mappedLogs.length, message: res.message };
       }
       return { success: false, count: timeLogsRef.current.length, message: res.message || 'Could not fetch remote time logs.' };
@@ -2702,7 +2763,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         case 'Email Reachout':
           return 'Google Workspace (Gmail / Outreach CRM)';
         case 'Email Interaction':
+        case 'Email Handling':
           return 'Customer Support Portal / Webmail';
+        case 'Admin Task':
+          return 'Admin Operations & Management Workspace';
         case 'Data Entry & Market Research':
           return 'Spreadsheet & Web Research Browser';
         case 'Follow-up':

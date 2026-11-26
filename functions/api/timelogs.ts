@@ -74,10 +74,25 @@ export async function onRequestGet(context: { request: Request; env: Env }) {
       );
     }
 
+    const rawLogs = Array.isArray(data.timeLogs) ? data.timeLogs : [];
+    const validLogs = rawLogs.filter((row: any) => {
+      if (!row || typeof row !== 'object') return false;
+      const empCode = String(row.employeeCode || '').trim();
+      const uid = String(row.userId || '').trim();
+      const uname = String(row.userName || '').trim();
+      if (!empCode && !uid && !uname) return false;
+      const id = String(row.id || row.sessionId || '').trim();
+      const task = String(row.task || '').trim();
+      const startTime = String(row.startTime || '').trim();
+      const duration = Number(row.durationSeconds || 0);
+      if (!id && !task && !startTime && !(duration > 0)) return false;
+      return true;
+    });
+
     return new Response(
       JSON.stringify({
         success: true,
-        timeLogs: Array.isArray(data.timeLogs) ? data.timeLogs : [],
+        timeLogs: validLogs,
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );

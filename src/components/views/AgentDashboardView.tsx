@@ -71,7 +71,11 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
 
   const totalTrackedSec = useMemo(() => {
     const completedSec = agentLogs
-      .filter((l) => l.status !== 'running')
+      .filter((l) => {
+        const st = String(l.status || '').trim().toLowerCase();
+        const endStr = String(l.endTime || '').trim().toLowerCase();
+        return st !== 'running' && st !== 'active' && !endStr.includes('in progress') && !endStr.includes('running');
+      })
       .reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
     return completedSec + liveExtraSeconds;
   }, [agentLogs, liveExtraSeconds]);

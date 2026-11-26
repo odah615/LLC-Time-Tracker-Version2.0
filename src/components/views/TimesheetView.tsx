@@ -248,6 +248,18 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     return candidate;
   };
 
+  const isRunningLog = (log?: Partial<TimeLog> | null): boolean => {
+    if (!log) return false;
+    const statusLower = String(log.status || '').trim().toLowerCase();
+    const endStr = String(log.endTime || '').trim().toLowerCase();
+    return (
+      statusLower === 'running' ||
+      statusLower === 'active' ||
+      endStr.includes('running') ||
+      endStr.includes('in progress')
+    );
+  };
+
   const allAvailableLogs = useMemo(() => {
     const list: TimeLog[] = [...timeLogs];
     const today = getManilaDateString();
@@ -286,9 +298,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
             ((l as any).employeeCode &&
               (l as any).employeeCode === u.employeeCode)) &&
           normalizeDate(l.date, l.startTime) === today &&
-          (l.status === 'running' ||
-            l.endTime === 'Running Live' ||
-            l.endTime === 'In Progress (Live)')
+          isRunningLog(l)
       );
 
       const existingRunningLog = runningIndex >= 0 ? list[runningIndex] : undefined;
@@ -475,13 +485,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
   ]);
 
   const periodFinalizedLogs = useMemo(
-    () =>
-      filteredLogs.filter(
-        (log) =>
-          log.status !== 'running' &&
-          log.endTime !== 'Running Live' &&
-          log.endTime !== 'In Progress (Live)'
-      ),
+    () => filteredLogs.filter((log) => !isRunningLog(log)),
     [filteredLogs]
   );
 
@@ -492,6 +496,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
         durationSeconds: 0,
         idleSeconds: 0,
         activity: 0,
+        liveLogId: null as string | null,
       };
     }
     const currentUserId = (currentUser.id || '').trim().toLowerCase();
@@ -511,9 +516,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
 
     const liveLog = filteredLogs.find(
       (log) =>
-        (log.status === 'running' ||
-          log.endTime === 'Running Live' ||
-          log.endTime === 'In Progress (Live)') &&
+        isRunningLog(log) &&
         (
           String(log.userId || '').trim().toLowerCase() === currentUserId ||
           (currentEmployeeCode &&
@@ -526,7 +529,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
     const isCurrentlyActive = Boolean(
       isTracking ||
       (presence && presence.isTracking === true) ||
-      (liveLog && (liveLog.status === 'running' || liveLog.endTime === 'Running Live'))
+      Boolean(liveLog)
     );
 
     const runningSeconds = isCurrentlyActive
@@ -561,6 +564,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       durationSeconds: runningSeconds,
       idleSeconds,
       activity,
+      liveLogId: liveLog?.id || null,
     };
   }, [
     filteredLogs,
@@ -573,15 +577,15 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
 
   const taskCategoryBreakdown = useMemo(() => {
     const map: Record<string, { seconds: number; count: number }> = {};
+    let liveBonusApplied = false;
     filteredLogs.forEach((log) => {
       const taskName = log.task || 'Unspecified Task';
-      const isRunning =
-        log.status === 'running' ||
-        log.endTime === 'Running Live' ||
-        log.endTime === 'In Progress (Live)';
-      const duration = isRunning
-        ? Math.max(Number(log.durationSeconds) || 0, livePeriodSession.durationSeconds)
-        : Number(log.durationSeconds) || 0;
+      const isRunning = isRunningLog(log);
+      let duration = Math.max(0, Number(log.durationSeconds) || 0);
+      if (isRunning && !liveBonusApplied && (!livePeriodSession.liveLogId || log.id === livePeriodSession.liveLogId)) {
+        duration = Math.max(duration, livePeriodSession.durationSeconds);
+        liveBonusApplied = true;
+      }
       if (!map[taskName]) {
         map[taskName] = { seconds: 0, count: 0 };
       }
@@ -589,7 +593,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       map[taskName].count += 1;
     });
     return Object.entries(map).sort((a, b) => b[1].seconds - a[1].seconds);
-  }, [filteredLogs, livePeriodSession.durationSeconds]);
+  }, [filteredLogs, livePeriodSession.durationSeconds, livePeriodSession.liveLogId]);
 
   const totalGrossSeconds = useMemo(
     () =>
@@ -830,8 +834,8 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       const tasks = Array.from(new Set(logs.map((l) => l.task).filter(Boolean))).join(', ');
 
       // Keep completed logs + auto-finalize any previous running logs with duration > 5s + latest active running log
-      const completedLogs = logs.filter((l) => l.status === 'completed');
-      const runningLogs = logs.filter((l) => l.status === 'running' || l.endTime === 'Running Live');
+      const completedLogs = logs.filter((l) => !isRunningLog(l));
+      const runningLogs = logs.filter((l) => isRunningLog(l));
 
       const previousRunningLogs = runningLogs.slice(0, runningLogs.length - 1).filter((l) => (Number(l.durationSeconds) || 0) > 5).map((l) => ({
         ...l,
@@ -854,7 +858,7 @@ export const TimesheetView: React.FC<TimesheetViewProps> = ({
       const earliest = sorted[0];
       const latest = sorted[sorted.length - 1];
 
-      const isRunning = logs.some((l) => l.status === 'running' || l.endTime === 'Running Live');
+      const isRunning = runningLogs.length > 0;
       const firstClockIn = earliest?.geoLocalStartTime || earliest?.startTime || '09:00:00 AM';
       const lastClockOut = isRunning ? 'Running Live' : (latest?.geoLocalEndTime || latest?.endTime || '05:00:00 PM');
 

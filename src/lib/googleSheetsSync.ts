@@ -2138,34 +2138,44 @@ function readTimeLogs(ss, opts) {
   var out = [];
   for (var i = 0; i < values.length; i++) {
     var r = values[i];
+    var rowId = String(r[0] || "").trim();
+    var rowEmpCode = String(r[1] || "").trim();
+    var rowEmpName = String(r[2] || "").trim();
+    var rowUserId = String(r[15] || "").trim();
+    var rowStart = asText_(r[6]);
+    var rowTask = String(r[14] || "").trim();
+    var rowDuration = Number(r[8] || 0);
+
+    // Skip blank or cleared rows in Time_Logs so they never appear as phantom sessions
+    if (!rowEmpCode && !rowEmpName && !rowUserId) continue;
+    if (!rowId && !rowStart && !rowTask && !(rowDuration > 0)) continue;
+
     var date = asText_(r[5], "date");
     if (date && date < since) continue;
 
     if (wantUser) {
-      var storedUserKey = String(r[15] || "").trim();
-      var rowEmployeeCode = String(r[1] || "").trim();
       var canonicalWanted = normalizeEmployeeCodeKey_(wantUser);
-      if (storedUserKey !== wantUser && rowEmployeeCode.toUpperCase() !== canonicalWanted && normalizeEmployeeCodeKey_(storedUserKey) !== canonicalWanted) continue;
+      if (rowUserId !== wantUser && rowEmpCode.toUpperCase() !== canonicalWanted && normalizeEmployeeCodeKey_(rowUserId) !== canonicalWanted) continue;
     }
 
     out.push({
-      id: String(r[0] || "").trim(),
-      sessionId: String(r[0] || "").trim(),
-      employeeCode: String(r[1] || "").trim(),
-      userName: String(r[2] || "").trim(),
+      id: rowId,
+      sessionId: rowId,
+      employeeCode: rowEmpCode,
+      userName: rowEmpName,
       role: String(r[3] || "").trim(),
       designation: String(r[4] || "").trim(),
       date: date,
-      startTime: asText_(r[6]),
+      startTime: rowStart,
       endTime: asText_(r[7]),
-      durationSeconds: Math.min(Number(r[8] || 0), MAX_SESSION_SECONDS),
+      durationSeconds: Math.min(rowDuration, MAX_SESSION_SECONDS),
       totalTime: String(r[9] || "").trim(),
       idleMinutes: Number(r[10] || 0),
       mousePercentage: Number(r[11] || 95),
       keyboardPercentage: Number(r[12] || 95),
       status: String(r[13] || "completed").trim(),
-      task: String(r[14] || "").trim(),
-      userId: String(r[15] || "").trim()
+      task: rowTask,
+      userId: rowUserId
     });
   }
   return out;
@@ -2434,7 +2444,7 @@ function createAllTabsNow() {
     var defaultDtRows = [
       ["Outbound Agent", "Data Entry & Market Research, Email Reachout, Follow-up, Training, Team Meeting, Coaching", 6, nowIso],
       ["Team Leader", "Team Supervision, Team Meeting, Training, Coaching, QA Review, On Shift", 6, nowIso],
-      ["Trainer", "Training, Coaching, Team Meeting, QA Review, On Shift", 5, nowIso],
+      ["Trainer", "Training, Coaching, Team Meeting, Email Handling, Admin Task, Data Entry & Market Research, On Shift", 7, nowIso],
       ["Admin", "System Ops Review, On Shift", 2, nowIso],
       ["QA Specialist", "QA Email Audit, Other QA Reviews, QA Coaching", 3, nowIso],
       ["Writer", "Content Writing, Team Meeting, On Shift", 3, nowIso],
