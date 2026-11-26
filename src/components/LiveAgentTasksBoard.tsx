@@ -215,7 +215,9 @@ export const LiveAgentTasksBoard: React.FC<LiveAgentTasksBoardProps> = ({
       }
 
       const userTodayLogs = timeLogs.filter((l) => l.userId === user.id && l.date === todayStr);
-      const finishedTodaySec = userTodayLogs.reduce((acc, l) => acc + l.durationSeconds, 0);
+      const finishedTodaySec = userTodayLogs
+        .filter((l) => l.status !== 'running')
+        .reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
       const latestLog = userTodayLogs[0] || timeLogs.find((l) => l.userId === user.id);
 
       const attendance = dailyAttendanceLogs.find((a) => a.userId === user.id && a.date === todayStr);

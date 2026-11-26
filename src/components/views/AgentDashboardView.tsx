@@ -70,7 +70,10 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
   }, [isTracking, elapsedSeconds, userPresenceList, currentUser]);
 
   const totalTrackedSec = useMemo(() => {
-    return agentLogs.reduce((acc, l) => acc + (Math.max(0, Number(l.durationSeconds) || 0)), 0) + liveExtraSeconds;
+    const completedSec = agentLogs
+      .filter((l) => l.status !== 'running')
+      .reduce((acc, l) => acc + Math.max(0, Number(l.durationSeconds) || 0), 0);
+    return completedSec + liveExtraSeconds;
   }, [agentLogs, liveExtraSeconds]);
   const totalHoursFormatted = (totalTrackedSec / 3600).toFixed(1);
 

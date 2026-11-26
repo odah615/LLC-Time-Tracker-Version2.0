@@ -505,7 +505,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return emp;
     });
-    return deduplicateUsers(ensureUsernames([...mergedEmployees, ...prevUsers]));
+
+    // Authoritative Google Sheets roster replaces stale cached/dummy rows (e.g. legacy LLC-0003).
+    // Preserve SuperAdmin only if not already present in the sheet response.
+    const hasSuperAdmin = mergedEmployees.some(
+      (u) =>
+        u.employeeCode?.toLowerCase() === 'superadmin' ||
+        u.id === 'usr-superadmin-red' ||
+        u.email?.toLowerCase() === 'admin@llc.com'
+    );
+    const preservedAdmin = hasSuperAdmin
+      ? []
+      : prevUsers.filter(
+          (u) =>
+            u.employeeCode?.toLowerCase() === 'superadmin' ||
+            u.id === 'usr-superadmin-red' ||
+            u.email?.toLowerCase() === 'admin@llc.com'
+        );
+
+    return deduplicateUsers(ensureUsernames([...mergedEmployees, ...preservedAdmin]));
   }, []);
 
   const [users, setUsers] = useState<User[]>(() => {
@@ -621,18 +639,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Active Session Persistence Helpers
+  const ACTIVE_SESSION_MAX_STALE_MS = 15 * 60 * 1000; // 15 minutes max gap for reload recovery
+  const ACTIVE_SESSION_MAX_AGE_MS = 14 * 60 * 60 * 1000; // 14 hours hard upper bound
+
   const getActiveSessionStorageKey = useCallback((code?: string): string => {
     return `trackpulse_active_session_${(code || 'default').trim().toLowerCase()}`;
   }, []);
 
+  const clearAllActiveSessionStorage = useCallback((specificCode?: string) => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (specificCode) {
+        localStorage.removeItem(getActiveSessionStorageKey(specificCode));
+      }
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('trackpulse_active_session_')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch {}
+  }, [getActiveSessionStorageKey]);
+
+  const clearLegacyDailyTotalRatchets = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('trackpulse_daily_total_')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch {}
+  }, []);
+
   const loadActiveSession = useCallback((code?: string) => {
     if (typeof window === 'undefined') return null;
+    // Never restore an active tracking session if the user is not currently authenticated
+    if (localStorage.getItem('trackpulse_auth') !== 'true') {
+      return null;
+    }
+    const key = getActiveSessionStorageKey(code);
     try {
-      const raw = localStorage.getItem(getActiveSessionStorageKey(code));
+      const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && parsed.taskStartTime && parsed.employeeCode) {
-          return parsed;
+          const now = Date.now();
+          const startMs = Number(parsed.taskStartTime);
+          const lastAliveMs = Number(parsed.lastHeartbeat || parsed.pauseStartTime || startMs);
+          const isValidStart = !isNaN(startMs) && startMs > 0 && startMs <= now;
+          const isWithinMaxAge = (now - startMs) <= ACTIVE_SESSION_MAX_AGE_MS;
+          const isFreshHeartbeat = parsed.isPaused
+            ? (now - lastAliveMs) <= ACTIVE_SESSION_MAX_AGE_MS
+            : (now - lastAliveMs) <= ACTIVE_SESSION_MAX_STALE_MS;
+
+          if (isValidStart && isWithinMaxAge && isFreshHeartbeat) {
+            return parsed;
+          }
+          // Session is stale (app was closed/slept or from a previous shift): discard it cleanly
+          localStorage.removeItem(key);
         }
       }
     } catch {}
@@ -662,12 +732,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const accumulatedPausedMsRef = useRef<number>(initialActiveSession?.accumulatedPausedMs || 0);
   const pauseStartTimeRef = useRef<number | null>(initialActiveSession?.pauseStartTime || null);
   const lastHeartbeatEpochMsRef = useRef<number>(initialActiveSession?.lastHeartbeat || 0);
+  const lastLocalSessionTouchMsRef = useRef<number>(initialActiveSession?.lastHeartbeat || 0);
   const last5mSyncEpochMsRef = useRef<number>(initialActiveSession?.lastSync5m || 0);
   const last10mSummarySyncEpochMsRef = useRef<number>(0);
 
   const activeSegmentIdRef = useRef<string>(
     initialActiveSession?.segmentId || `seg-${currentUser.employeeCode || currentUser.id}-${initialActiveSession?.taskStartTime || Date.now()}`
   );
+  const stopTrackingRef = useRef<() => void>(() => {});
 
   const ensureDailySummaryForToday = useCallback(() => {
     const empCode = currentUser.employeeCode || currentUser.id;
@@ -776,9 +848,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsIdleAlertActive(false);
       setInactivityAlertState({ isOpen: false, idleMinutes: 10, remainingSeconds: 300 });
     } else {
-      setIsTracking(false);
       setIsIdleAlertActive(false);
       setInactivityAlertState({ isOpen: false, idleMinutes: 10, remainingSeconds: 300 });
+      if (isTrackingRef.current) {
+        stopTrackingRef.current();
+      } else {
+        setIsTracking(false);
+        setIsPaused(false);
+        setElapsedSeconds(0);
+        taskStartTimeRef.current = 0;
+        accumulatedPausedMsRef.current = 0;
+        pauseStartTimeRef.current = null;
+        clearAllActiveSessionStorage(currentUser.employeeCode || currentUser.id);
+      }
     }
   };
 
@@ -861,9 +943,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const confirmTaskSwitch = () => {
     if (taskSwitchPending) {
       const now = new Date();
-      const todayStr = getManilaDateString(now);
       const startMs = taskStartTimeRef.current || (now.getTime() - elapsedSeconds * 1000);
-      const totalPaused = accumulatedPausedMsRef.current || (isPaused && pauseStartTimeRef.current ? (now.getTime() - pauseStartTimeRef.current) : 0);
+      const segmentDateStr = getManilaDateString(new Date(startMs));
+      const currentPauseMs = isPaused && pauseStartTimeRef.current ? Math.max(0, now.getTime() - pauseStartTimeRef.current) : 0;
+      const totalPaused = (accumulatedPausedMsRef.current || 0) + currentPauseMs;
       const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
       const startTimeIso = getManilaIsoString(startMs);
 
@@ -892,7 +975,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           mouseActivityAvg: 95,
           keyboardActivityAvg: 90,
           idleSeconds: sessionIdleDeductionSeconds,
-          date: todayStr,
+          date: segmentDateStr,
           notes: `Completed task segment for ${completedTaskCategory}`,
           appsUsed: [],
         };
@@ -1010,7 +1093,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const empCode = currentUser.employeeCode || currentUser.id;
     const newSegmentId = `seg-${empCode}-${now}`;
 
-    // Auto-finalize any previous orphan running logs for this employee before starting a new segment
+    // Auto-finalize any previous orphan running logs for this employee using their last recorded duration
+    // (NEVER inflate abandoned sessions to now - startTime)
     setTimeLogs((prev) => {
       const targetCode = String(empCode).trim().toLowerCase();
       let modified = false;
@@ -1018,24 +1102,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const lCode = String(l.employeeCode || l.userId || '').trim().toLowerCase();
         if (lCode === targetCode && l.id !== newSegmentId && (l.status === 'running' || l.id.startsWith('active-seg-') || l.id.startsWith('seg-running-'))) {
           modified = true;
-          let computedDuration = l.durationSeconds || 1;
-          let computedEndIso = getManilaIsoString(new Date(now));
-          let computedGeoEnd = getManilaTimeString(new Date(now));
+          let computedDuration = Math.max(0, Number(l.durationSeconds) || 0);
+          const lStartMs = l.startTime ? new Date(l.startTime).getTime() : NaN;
 
-          if (l.startTime) {
-            const lStartMs = new Date(l.startTime).getTime();
-            if (!isNaN(lStartMs) && lStartMs > 0 && lStartMs <= now) {
-              computedDuration = Math.max(1, Math.floor((now - lStartMs) / 1000));
-            }
+          // Only infer duration from wall clock if no duration was saved yet AND the log is recent (<= 15 min)
+          if (computedDuration <= 1 && !isNaN(lStartMs) && lStartMs > 0 && lStartMs <= now && (now - lStartMs) <= ACTIVE_SESSION_MAX_STALE_MS) {
+            computedDuration = Math.max(1, Math.floor((now - lStartMs) / 1000));
           }
 
           if (computedDuration > 5) {
+            const endMs = (!isNaN(lStartMs) && lStartMs > 0) ? (lStartMs + computedDuration * 1000) : now;
             return {
               ...l,
               status: 'completed' as const,
               durationSeconds: computedDuration,
-              endTime: computedEndIso,
-              geoLocalEndTime: computedGeoEnd,
+              endTime: getManilaIsoString(new Date(endMs)),
+              geoLocalEndTime: getManilaTimeString(new Date(endMs)),
             };
           }
           return null;
@@ -1054,6 +1136,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     accumulatedPausedMsRef.current = 0;
     pauseStartTimeRef.current = null;
     lastHeartbeatEpochMsRef.current = now;
+    lastLocalSessionTouchMsRef.current = now;
     last5mSyncEpochMsRef.current = now;
 
     setIsTracking(true);
@@ -1238,9 +1321,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const stopTracking = () => {
     if (!isTracking) return;
     const now = new Date();
-    const todayStr = getManilaDateString(now);
     const startMs = taskStartTimeRef.current || (now.getTime() - elapsedSeconds * 1000);
-    const totalPaused = accumulatedPausedMsRef.current || (isPaused && pauseStartTimeRef.current ? (now.getTime() - pauseStartTimeRef.current) : 0);
+    const todayStr = getManilaDateString(new Date(startMs));
+    const currentPauseMs = isPaused && pauseStartTimeRef.current ? Math.max(0, now.getTime() - pauseStartTimeRef.current) : 0;
+    const totalPaused = (accumulatedPausedMsRef.current || 0) + currentPauseMs;
     const duration = Math.max(1, Math.floor((now.getTime() - startMs - totalPaused) / 1000));
     const startTimeIso = getManilaIsoString(startMs);
 
@@ -1271,7 +1355,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addTimeLog(completedLog);
     setSessionIdleDeductionSeconds(0);
 
-    // Finalizer Sweep: Clean up any stuck / unclosed running sessions for this user on today's date
+    // Finalizer Sweep: Clean up any stuck / unclosed running sessions for this user
+    // Preserve their last verified recorded duration instead of inflating to now - startTime
     const empCode = String(currentUser.employeeCode || currentUser.id || '').trim().toLowerCase();
     const stuckLogsToFinalize: TimeLog[] = [];
 
@@ -1282,26 +1367,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isDifferentSegment = l.id !== segId;
 
       if (isSameUser && isRunning && isDifferentSegment) {
-        let computedEndIso = getManilaIsoString(now);
-        let computedGeoEnd = getManilaTimeString(now);
-        let realDurationSec = l.durationSeconds || 0;
+        let realDurationSec = Math.max(0, Number(l.durationSeconds) || 0);
+        const lStartMs = l.startTime ? new Date(l.startTime).getTime() : NaN;
 
-        if (l.startTime) {
-          const lStartMs = new Date(l.startTime).getTime();
-          if (!isNaN(lStartMs) && lStartMs > 0 && lStartMs <= now.getTime()) {
-            realDurationSec = Math.max(1, Math.floor((now.getTime() - lStartMs) / 1000));
-          }
+        if (realDurationSec <= 1 && !isNaN(lStartMs) && lStartMs > 0 && lStartMs <= now.getTime() && (now.getTime() - lStartMs) <= ACTIVE_SESSION_MAX_STALE_MS) {
+          realDurationSec = Math.max(1, Math.floor((now.getTime() - lStartMs) / 1000));
         }
 
-        const finalizedLog: TimeLog = {
-          ...l,
-          status: 'completed',
-          endTime: computedEndIso,
-          geoLocalEndTime: computedGeoEnd,
-          durationSeconds: realDurationSec,
-          notes: l.notes ? `${l.notes} (Auto-closed on tracker stop)` : 'Auto-closed on tracker stop',
-        };
-        stuckLogsToFinalize.push(finalizedLog);
+        if (realDurationSec > 5) {
+          const endMs = (!isNaN(lStartMs) && lStartMs > 0) ? (lStartMs + realDurationSec * 1000) : now.getTime();
+          const finalizedLog: TimeLog = {
+            ...l,
+            status: 'completed',
+            endTime: getManilaIsoString(new Date(endMs)),
+            geoLocalEndTime: getManilaTimeString(new Date(endMs)),
+            durationSeconds: realDurationSec,
+            notes: l.notes ? `${l.notes} (Auto-closed on tracker stop)` : 'Auto-closed on tracker stop',
+          };
+          stuckLogsToFinalize.push(finalizedLog);
+        }
       }
     });
 
@@ -1390,46 +1474,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }).catch(() => {});
   };
 
+  stopTrackingRef.current = stopTracking;
+
   const getTodayTrackedSeconds = useCallback((): number => {
     const today = getManilaDateString();
-    const empCode = (currentUser.employeeCode || currentUser.id || '').trim();
 
     const completedTodaySec = timeLogs
       .filter((l) => {
-        const matchesUser =
-          (currentUser.id && l.userId === currentUser.id) ||
-          (currentUser.employeeCode && l.employeeCode === currentUser.employeeCode);
-        if (!matchesUser) return false;
+        if (!matchesAgentRecord(l, currentUser)) return false;
         if (l.status !== 'completed') return false;
-        const logDate = l.date || (l.startTime ? getManilaDateString(new Date(l.startTime)) : today);
+        const logDate = normalizeWorkDate(l.date, l.startTime) || today;
         return logDate === today;
       })
       .reduce((sum, l) => sum + Math.max(0, Number(l.durationSeconds) || 0), 0);
 
     const activeSec = isTracking ? Math.max(0, elapsedSeconds) : 0;
-    const currentCalculated = completedTodaySec + activeSec;
-
-    let savedBackup = 0;
-    if (empCode) {
-      try {
-        const key = `trackpulse_daily_total_${empCode.toLowerCase()}_${today}`;
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          savedBackup = Math.max(0, Number(raw) || 0);
-        }
-        if (currentCalculated > savedBackup) {
-          localStorage.setItem(key, String(currentCalculated));
-        }
-      } catch {}
-    }
-
-    return Math.max(currentCalculated, savedBackup);
-  }, [timeLogs, currentUser.id, currentUser.employeeCode, isTracking, elapsedSeconds]);
+    return completedTodaySec + activeSec;
+  }, [timeLogs, currentUser, isTracking, elapsedSeconds]);
 
   const todayTotalSeconds = getTodayTrackedSeconds();
 
   const login = (user: User, mode: 'webapp' | 'software' = 'webapp', token?: string) => {
     const normalizedUser = normalizeSuperAdmin(user);
+
+    // Always begin a fresh login in clean Standby state — never inherit or auto-start a stale timer
+    clearAllActiveSessionStorage(normalizedUser.employeeCode || normalizedUser.id);
+    clearLegacyDailyTotalRatchets();
+    setIsTracking(false);
+    setIsPaused(false);
+    setElapsedSeconds(0);
+    setSessionIdleDeductionSeconds(0);
+    setIsIdleAlertActive(false);
+    taskStartTimeRef.current = 0;
+    accumulatedPausedMsRef.current = 0;
+    pauseStartTimeRef.current = null;
+    lastHeartbeatEpochMsRef.current = 0;
+    lastLocalSessionTouchMsRef.current = 0;
+    last5mSyncEpochMsRef.current = 0;
+
     setCurrentUser(normalizedUser);
     setCurrentDesignation(normalizedUser.designation || 'Outbound Agent');
     setIsAuthenticated(true);
@@ -1556,7 +1638,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsTracking(false);
     setIsPaused(false);
     setElapsedSeconds(0);
+    setSessionIdleDeductionSeconds(0);
+    taskStartTimeRef.current = 0;
+    accumulatedPausedMsRef.current = 0;
+    pauseStartTimeRef.current = null;
+    lastHeartbeatEpochMsRef.current = 0;
+    lastLocalSessionTouchMsRef.current = 0;
+    last5mSyncEpochMsRef.current = 0;
     setTimeLogs([]);
+    clearAllActiveSessionStorage(currentUser.employeeCode || currentUser.id);
+    clearLegacyDailyTotalRatchets();
     localStorage.removeItem('trackpulse_auth');
     localStorage.removeItem('trackpulse_current_user');
     localStorage.removeItem('trackpulse_timelogs');
@@ -2699,6 +2790,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setElapsedSeconds(elapsed);
       elapsedSecondsRef.current = elapsed;
 
+      // Refresh localStorage active-session liveness timestamp every 30s so reload recovery stays fresh
+      // while closed/abandoned tabs age out cleanly after ACTIVE_SESSION_MAX_STALE_MS (15m)
+      if (!isPausedRef.current && now - lastLocalSessionTouchMsRef.current >= 30000) {
+        lastLocalSessionTouchMsRef.current = now;
+        try {
+          const empCode = currentUserRef.current.employeeCode || currentUserRef.current.id;
+          const activeSessionData = {
+            segmentId: activeSegmentIdRef.current,
+            employeeCode: empCode,
+            userId: currentUserRef.current.id,
+            task: currentTaskRef.current,
+            designation: currentDesignationRef.current,
+            taskStartTime: taskStartTimeRef.current,
+            accumulatedPausedMs: accumulatedPausedMsRef.current,
+            isPaused: false,
+            pauseStartTime: null,
+            lastHeartbeat: now,
+            lastSync5m: last5mSyncEpochMsRef.current,
+          };
+          localStorage.setItem(getActiveSessionStorageKey(empCode), JSON.stringify(activeSessionData));
+        } catch {}
+      }
+
       // Evaluate per-agent Idle Tracking if enabled for current user
       if (currentUserRef.current?.idleTrackingEnabled === true && !isPausedRef.current) {
         const noInputDurationMs = now - lastUserActivityMsRef.current;
@@ -2769,7 +2883,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           userAvatar: currentUserRef.current.avatar || '',
           designation: currentDesignationRef.current,
           task: currentTaskRef.current,
-          date: getManilaDateString(new Date(now)),
+          date: getManilaDateString(new Date(taskStartTimeRef.current)),
           startTime: startTimeIso,
           endTime: 'In Progress (10m Sync)',
           durationSeconds: Math.max(1, elapsed),
@@ -2813,7 +2927,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    if (isTracking) {
+    if (isAuthenticated && isTracking) {
       performTick();
 
       // Launch unthrottled Web Worker ticker for background / minimized state
@@ -2863,7 +2977,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         window.removeEventListener('pageshow', handlePageShow);
       };
     }
-  }, [isTracking, isPaused, googleSheetsWebhookUrl, computeElapsedSeconds]);
+  }, [isAuthenticated, isTracking, isPaused, googleSheetsWebhookUrl, computeElapsedSeconds, getActiveSessionStorageKey]);
 
   return (
     <AppContext.Provider

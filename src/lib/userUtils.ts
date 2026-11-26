@@ -11,8 +11,6 @@ export const capitalizeWords = (str: string): string => {
 
 export const CANONICAL_EMPLOYEE_DIRECTORY: Record<string, { name: string; username: string; email: string; role: 'admin' | 'trainer' | 'agent' | 'team_lead'; designation: string }> = {
   'SUPERADMIN': { name: 'Admin', username: 'admin', email: 'admin@llc.com', role: 'admin', designation: 'Admin' },
-  'LLC-0003': { name: 'Pia', username: 'trainer', email: 'piaodahcam@gmail.com', role: 'trainer', designation: 'Trainer' },
-  'LLC-0023': { name: 'Juan David', username: 'jdavid', email: 'jdavid@gmail.com', role: 'agent', designation: 'Outbound Agent' },
 };
 
 /**
@@ -55,9 +53,7 @@ export const resolveCanonicalEmployee = (input?: {
   const rawNameLower = rawNameOriginal.toLowerCase();
   const numCode = rawCode.replace(/^[A-Z\-_]+/, '');
 
-  const ALIAS_MAP: Record<string, string> = {
-    'pdelin': 'LLC-0003',
-  };
+  const ALIAS_MAP: Record<string, string> = {};
 
   const aliasTarget = ALIAS_MAP[rawUser] || ALIAS_MAP[rawCode.toLowerCase()] || ALIAS_MAP[rawEmail.split('@')[0]];
   if (aliasTarget && CANONICAL_EMPLOYEE_DIRECTORY[aliasTarget]) {
@@ -224,43 +220,6 @@ export const deduplicateUsers = (rawUsers: User[]): User[] => {
         result[existingAdminIdx] = { ...result[existingAdminIdx], ...canonicalAdmin };
       } else {
         result.unshift(canonicalAdmin);
-      }
-      continue;
-    }
-
-    const isTrainer =
-      u.employeeCode?.toUpperCase() === 'LLC-0003' ||
-      u.email?.toLowerCase() === 'piaodahcam@gmail.com' ||
-      u.id === 'usr-llc-0003' ||
-      u.name?.toLowerCase().trim() === 'pia' ||
-      (u.designation?.toLowerCase().includes('trainer') && u.role === 'trainer');
-
-    if (isTrainer) {
-      const existingTrainerIdx = result.findIndex(
-        (x) =>
-          x.employeeCode?.toUpperCase() === 'LLC-0003' ||
-          x.email?.toLowerCase() === 'piaodahcam@gmail.com' ||
-          x.id === 'usr-llc-0003' ||
-          x.name?.toLowerCase().trim() === 'pia'
-      );
-      const canonicalTrainer: User = {
-        ...u,
-        id: 'usr-llc-0003',
-        employeeCode: 'LLC-0003',
-        email: 'piaodahcam@gmail.com',
-        name: 'Pia',
-        role: 'trainer',
-        designation: 'Trainer',
-        username: 'trainer',
-        department: 'Training',
-        geoTimezone: u.geoTimezone || 'Asia/Manila',
-        geoCity: u.geoCity || 'Manila, Philippines',
-      };
-
-      if (existingTrainerIdx >= 0) {
-        result[existingTrainerIdx] = { ...result[existingTrainerIdx], ...canonicalTrainer };
-      } else {
-        result.push(canonicalTrainer);
       }
       continue;
     }
@@ -480,8 +439,24 @@ export const resolveSupervisor = (
   if (rawLower.includes('superadmin') || rawLower === 'usr-superadmin-red') {
     return allUsers.find((u) => u.role === 'admin' || u.employeeCode?.toUpperCase() === 'SUPERADMIN') || null;
   }
+  if (rawLower === 'trainer') {
+    return (
+      allUsers.find((u) => u.username?.toLowerCase() === 'trainer') ||
+      allUsers.find((u) => u.username?.toLowerCase() === 'pdeli' || u.employeeCode?.toUpperCase() === 'LLC-0040') ||
+      allUsers.find((u) => u.role === 'trainer') ||
+      null
+    );
+  }
   if (rawLower.includes('usr-llc-0003') || rawLower.includes('pia')) {
-    return allUsers.find((u) => u.employeeCode?.toUpperCase() === 'LLC-0003' || u.username === 'trainer') || null;
+    return (
+      allUsers.find(
+        (u) =>
+          u.employeeCode?.toUpperCase() === 'LLC-0040' ||
+          u.username?.toLowerCase() === 'pdeli' ||
+          u.name?.toLowerCase().includes('pia') ||
+          u.employeeCode?.toUpperCase() === 'LLC-0003'
+      ) || null
+    );
   }
   if (rawLower.includes('usr-1791811080947') || rawLower.includes('mpolo') || rawLower.includes('marco polo')) {
     return allUsers.find((u) => u.username === 'mpolo' || u.employeeCode?.toUpperCase() === 'LLC-0025') || null;
